@@ -6,16 +6,18 @@ If the utterance contains life-threatening red flags, the caller is
 instructed to dial 911 and the turn is short-circuited.
 """
 
+import asyncio
 import json
 import logging
 import os
+import re
 
 from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
 _client: AsyncOpenAI | None = None
-_model: str = "meta-llama/Llama-3.1-8B-Instruct"
+_model: str = "deepseek-ai/DeepSeek-V3.1"
 
 
 def configure(api_key: str, model: str | None = None) -> None:
@@ -60,16 +62,34 @@ async def classify_emergency(text: str) -> dict:
         logger.warning("Baseten not configured — skipping emergency check")
         return {"classification": "unclear", "reason": "classifier not configured"}
     try:
-        resp = await _client.chat.completions.create(
-            model=_model,
-            messages=[
-                {"role": "user", "content": _EMERGENCY_PROMPT.format(text=text)}
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=120,
-            temperature=0.0,
+        resp = await asyncio.wait_for(
+            _client.chat.completions.create(
+                model=_model,
+                messages=[
+                    {"role": "user", "content": _EMERGENCY_PROMPT.format(text=text)}
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=120,
+                temperature=0.0,
+            ),
+            timeout=3.0,
         )
-        return json.loads(resp.choices[0].message.content)
+        content = resp.choices[0].message.content or ""
+        # DeepSeek sometimes wraps keys in extra quotes; try JSON first, then regex.
+        try:
+            raw = json.loads(content)
+            normalized = {k.strip('"').strip("'"): str(v).strip('"').strip("'")
+                          for k, v in raw.items()}
+            classification = normalized.get("classification", "unclear").lower()
+        except (json.JSONDecodeError, AttributeError):
+            m = re.search(r'classification["\s:]+([a-z_]+)', content, re.IGNORECASE)
+            classification = m.group(1).lower() if m else "unclear"
+        if classification not in ("emergency", "non_emergency", "unclear"):
+            classification = "unclear"
+        return {"classification": classification, "raw": content[:120]}
+    except asyncio.TimeoutError:
+        logger.warning("Baseten classify_emergency timed out")
+        return {"classification": "unclear", "reason": "classifier timeout"}
     except Exception as exc:
-        logger.warning("Baseten classify_emergency failed: %s", exc)
-        return {"classification": "unclear", "reason": "classifier unavailable"}
+        logger.warning("Baseten classify_emergency failed: %s: %s", type(exc).__name__, exc)
+        return {"classification": "unclear", "reason": f"{type(exc).__name__}: {exc}"}
