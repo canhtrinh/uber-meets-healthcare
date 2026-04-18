@@ -1,4 +1,4 @@
-import type { Metadata, Viewport } from "next";
+import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -16,16 +16,6 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Nightingale — voice-first home nurse dispatch",
   description: "Talk to an AI dispatcher. See your case build live. Book a nurse.",
-};
-
-// viewportFit "cover" unlocks env(safe-area-inset-*) on iPhone so the fixed
-// booking bar clears the home indicator instead of sitting under it.
-export const viewport: Viewport = {
-  width: "device-width",
-  initialScale: 1,
-  maximumScale: 1,
-  viewportFit: "cover",
-  themeColor: "#10b981",
 };
 
 export default function RootLayout({

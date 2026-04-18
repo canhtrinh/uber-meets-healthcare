@@ -28,10 +28,7 @@ export function BookingBar({ nurse, onConfirm, onCancel }: Props) {
     when === "Now" && !nurse.availableNow ? nurse.nextSlot : when;
 
   return (
-    <div
-      className="fixed inset-x-0 bottom-0 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-950/95 backdrop-blur px-4 pt-3 sm:px-6"
-      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 12px)" }}
-    >
+    <div className="fixed inset-x-0 bottom-0 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-950/95 backdrop-blur px-4 py-3 sm:px-6">
       <div className="mx-auto max-w-5xl flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-400 to-sky-500 flex items-center justify-center text-white text-xs font-semibold">
