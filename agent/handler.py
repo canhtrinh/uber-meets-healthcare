@@ -30,6 +30,7 @@ from primfunctions.completions import (
     deserialize_conversation,
     generate_chat_completion,
 )
+import baseten
 
 
 # ---------- System prompt ----------
@@ -371,6 +372,10 @@ async def handler(event: Event, context: Context):
     if isinstance(event, StartEvent):
         # configure_provider takes `provider` and exactly one of voicerun_managed / api_key.
         configure_provider(provider="anthropic", voicerun_managed=True)
+        baseten.configure(
+            api_key=context.variables.get("BASETEN_API_KEY", ""),
+            model=context.variables.get("BASETEN_MODEL"),
+        )
         state = _get_state(context)
         context.set_completion_messages([{"role": "system", "content": SYSTEM_PROMPT}])
         yield _state_update_event(state)
@@ -389,6 +394,20 @@ async def handler(event: Event, context: Context):
     user_text = event.data.get("text", "") or ""
     if not user_text.strip():
         return
+
+    # --- Baseten safety classifier (runs before the main LLM loop) ---
+    emergency = await baseten.classify_emergency(user_text)
+    if emergency.get("classification") == "emergency":
+        yield TextToSpeechEvent(
+            text=(
+                "This sounds like it could be a medical emergency. "
+                "Please hang up and call 911 immediately. "
+                "Do not wait — call 911 now."
+            ),
+            voice=VOICE,
+        )
+        return
+    # -----------------------------------------------------------------
 
     state = _get_state(context)
     messages = context.get_completion_messages() or [
