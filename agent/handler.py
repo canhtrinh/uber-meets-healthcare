@@ -37,62 +37,73 @@ import baseten
 
 SYSTEM_PROMPT = """You are a warm, calm dispatcher at a 24/7 home-health nursing service.
 You are on a voice call with someone who needs a nurse at their home. Your job is to
-(a) gather the REQUIRED intake, (b) run search_nurses once you have it, and (c) book
-the nurse the caller picks.
+(a) gather the REQUIRED intake, (b) run search_nurses the MOMENT intake is complete,
+(c) book the nurse the caller picks.
 
-REQUIRED intake — you MUST have ALL FIVE before calling search_nurses. If any are
-missing, your next turn MUST ask about the first missing one. Do NOT call search_nurses
-while anything is missing; the tool will refuse.
+REQUIRED intake — you MUST have ALL NINE before calling search_nurses. The tool
+will refuse if anything is missing.
 
-  1. patient.age            (ask: "how old are you?" / "how old is the patient?")
-  2. patient.livesAlone     (ask: "are you alone right now?" / "is anyone with you?")
-  3. situation.description  (1–2 sentence plain-language summary of what happened)
-  4. situation.issueTags    (at least one tag from the ISSUE TAGS list below)
-  5. situation.urgency      ("now" / "soon" / "scheduled")
+  1. patient.name               (ask: "what's your name?" / "who am I speaking with?")
+  2. patient.age                (ask: "how old are you?")
+  3. patient.livesAlone         (ask: "are you alone right now?" / "is anyone with you?")
+  4. situation.description      (plain-language summary of what happened)
+  5. situation.issueTags        (at least one tag from the ISSUE TAGS list)
+  6. situation.urgency          ("now" / "soon" / "scheduled")
+  7. emergencyContact.name      (ask: "who should we call if anything goes wrong?")
+  8. emergencyContact.phone     (ask: "what's their phone number?")
+  9. insurance.provider         (ask: "what health insurance do you have?")
 
-OPTIONAL intake — only ask if the caller volunteers OR it's clearly relevant:
-  - patient.name
-  - preferences.language
-  - preferences.genderPref
+OPTIONAL (ask only if caller volunteers OR clearly relevant):
+  - emergencyContact.relationship (e.g. daughter, spouse)
+  - insurance.memberId           (don't make them read long IDs over voice)
+  - preferences.language, preferences.genderPref
 
 CONVERSATION RULES:
-- Keep every reply SHORT (one sentence, one question).
-- ASK ONE QUESTION AT A TIME. Never stack multiple questions.
-- After you learn something, IMMEDIATELY call the matching update_* tool. Don't batch.
-- After each tool call, read the `missingRequired` field in the tool result. If it is
-  non-empty, your very next sentence must ask about the first item in that list.
-- Only when `missingRequired` is empty should you call search_nurses.
-- When search_nurses returns, tell the caller briefly: "I found [N] nurses nearby, the
-  closest is about [X] minutes away. Tap one on your screen to book." Don't read the
-  full list aloud — the UI shows it.
-- If the caller sends "[user-edit] path=value", acknowledge briefly ("got it, noted")
-  and, if the edit is to patient/situation/preferences, call search_nurses again.
-- If the caller sends "[user-pick] book nurseId=<id> when=<time>", confirm briefly
-  and call book_nurse with those exact values.
-- If the caller seems in real danger (severe bleeding, chest pain, can't breathe),
-  gently suggest 911 first — but still collect intake if they stay on the line.
+- ONE short question per turn. Phone-call cadence, no lists, no markdown, no stacked
+  questions.
+- After you learn something, IMMEDIATELY call the matching update_* tool. You MAY
+  emit multiple update_* tool_calls in a single response when the caller shares
+  several things at once — parallel tool use is PREFERRED, it cuts turn latency.
+- After every tool call, read the `missingRequired` field in the result. If it is
+  non-empty, your very next sentence asks about the FIRST item in that list.
+- The moment `missingRequired` is EMPTY, call search_nurses in the SAME response.
+  Do NOT announce "I'll find nurses now" as its own turn. Do NOT ask the caller for
+  permission — just call it. The UI will show the results the moment it returns.
+- When search_nurses returns, its result includes `topCandidates` with each nurse's
+  id, name, ETA, and next slot. Use that to map a spoken name ("book Sarah Chen")
+  to the right nurseId. Announce ONE sentence: "Found a few nurses nearby, closest
+  is about [X] min — tap one on your screen, or tell me who to book."
+- "[user-edit] path=value": acknowledge briefly ("got it"), then if the edit is to
+  patient/situation/preferences/emergencyContact/insurance, re-call search_nurses
+  so the ranking refreshes.
+- "[user-pick] book nurseId=<id> when=<time>": confirm briefly and call book_nurse
+  with those exact values.
+- "book <name>" spoken: prefer the matching nurseId from the last search_nurses
+  result; if you can't resolve it, pass nurseName and the server will fuzzy-match.
+- Real danger signs (severe bleeding, chest pain, can't breathe, stroke symptoms):
+  gently suggest 911 first — but stay on the line and keep gathering intake.
 
-FIRST TURN SCRIPT (already handled by greeting): "Take a breath - what's going on?"
-Then listen. Your NEXT turn should:
-  - call update_situation with whatever you learned (description, tags, urgency),
-  - read `missingRequired` in the result,
-  - ask about the first missing item (usually age).
+FIRST TURN SCRIPT (already spoken as the greeting): the caller just heard the 911
+disclaimer + "what's going on?" Your next turn reacts to whatever they say. Start
+with update_situation for the situation they describe, then ask about the first
+missing required field (usually their name).
 
-ISSUE TAGS (lowercase, use exact strings):
+ISSUE TAGS (lowercase, exact strings):
 fall, wound-care, post-op, medication-management, geriatric-assessment,
 iv-therapy, pediatric, mental-health, chronic-disease, hospice,
 dementia-care, cardiac, respiratory
 
 GOOD FOLLOW-UPS:
+  "What's your name?"
   "How old are you?"
   "Is anyone with you right now?"
-  "Can you tell me a little more about what happened?"
-  "Do you need someone right away, or can we schedule a visit?"
-  "Is there any bleeding?"
-  "Are you able to stand?"
+  "Can you tell me a bit more about what happened?"
+  "Do you need someone right away, or is this something we can schedule?"
+  "Who should I call if anything goes wrong — what's their name and number?"
+  "What insurance do you have?"
 
-Remember: ONE question per turn. Be human. The UI on their screen mirrors everything
-you learn — no need to read it back.
+Remember: ONE question per turn. Be human. The UI mirrors your state — no need to
+read it back.
 """
 
 
@@ -171,6 +182,8 @@ def _empty_state() -> dict:
         "patient": {},
         "situation": {"description": None, "issueTags": [], "urgency": None},
         "preferences": {},
+        "emergencyContact": {},
+        "insurance": {},
         "location": DEFAULT_LOCATION.copy(),
         "candidates": [],
         "booking": None,
@@ -295,6 +308,35 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "update_emergency_contact",
+            "description": "Record the patient's emergency contact — someone to reach if something goes wrong. Call as soon as you learn a name or phone number. Both name AND phone are required before search_nurses can run; relationship is optional.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Emergency contact's name"},
+                    "phone": {"type": "string", "description": "Emergency contact's phone number, any readable format"},
+                    "relationship": {"type": "string", "description": "Optional — e.g. 'daughter', 'spouse', 'neighbor'"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_insurance",
+            "description": "Record the patient's health insurance. Provider name is required before search_nurses; memberId is optional and only worth collecting if the caller volunteers it (don't make them read a long ID over voice).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "provider": {"type": "string", "description": "Insurance provider (e.g. 'Medicare', 'Blue Cross', 'Kaiser', 'Aetna')"},
+                    "memberId": {"type": "string", "description": "Optional member/policy ID"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_nurses",
             "description": "Rank nurses for the current patient+situation. Returns top matches filtered by issue tags, urgency and preferences, ranked by ETA. Call this once you have enough info, and again after any material change.",
             "parameters": {"type": "object", "properties": {}},
@@ -304,14 +346,15 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "book_nurse",
-            "description": "Book the selected nurse at the given time. Call this only after the caller has verbally confirmed.",
+            "description": "Book the selected nurse at the given time. Call this only after the caller has verbally confirmed. Prefer nurseId from the last search_nurses result; if you only have a name, pass nurseName and the server will resolve it.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "nurseId": {"type": "string"},
+                    "nurseId": {"type": "string", "description": "Nurse id from search_nurses.candidates[].id (preferred)"},
+                    "nurseName": {"type": "string", "description": "Fallback when only the name is known (e.g. 'Sarah Chen'). Fuzzy-matched to current candidates."},
                     "when": {"type": "string", "description": "Human-readable time, e.g. 'Now', 'Today 3:00 PM', 'Tomorrow 9:00 AM'"},
                 },
-                "required": ["nurseId", "when"],
+                "required": ["when"],
             },
         },
     },
@@ -346,12 +389,32 @@ def _apply_update_preferences(state: dict, args: dict) -> dict:
     return state
 
 
+def _apply_update_emergency_contact(state: dict, args: dict) -> dict:
+    ec = state.setdefault("emergencyContact", {})
+    for k in ("name", "phone", "relationship"):
+        if args.get(k):
+            ec[k] = args[k]
+    return state
+
+
+def _apply_update_insurance(state: dict, args: dict) -> dict:
+    ins = state.setdefault("insurance", {})
+    for k in ("provider", "memberId"):
+        if args.get(k):
+            ins[k] = args[k]
+    return state
+
+
 REQUIRED_FIELDS = [
+    ("patient", "name", "the patient's name"),
     ("patient", "age", "the patient's age"),
     ("patient", "livesAlone", "whether the patient is alone right now"),
     ("situation", "description", "a short description of what happened"),
     ("situation", "issueTags", "the type of care needed (at least one tag)"),
     ("situation", "urgency", "how urgent this is (now, soon, or scheduled)"),
+    ("emergencyContact", "name", "the emergency contact's name"),
+    ("emergencyContact", "phone", "the emergency contact's phone number"),
+    ("insurance", "provider", "their insurance provider"),
 ]
 
 
@@ -371,16 +434,59 @@ def _apply_search_nurses(state: dict, args: dict) -> dict:
     return state
 
 
+def _resolve_nurse(state: dict, args: dict):
+    """Find the referenced nurse by id (preferred) or fuzzy-matched name.
+    Search the current candidates first, then fall back to the full catalog.
+    Returns the nurse dict or None."""
+    nid = (args.get("nurseId") or "").strip()
+    if nid:
+        for n in state.get("candidates") or []:
+            if n["id"] == nid:
+                return n
+        for n in NURSES:
+            if n["id"] == nid:
+                return n
+    name = (args.get("nurseName") or "").strip().lower()
+    if name:
+        pool = (state.get("candidates") or []) + NURSES
+        # 1) exact (case-insensitive) match on the prefix before the comma
+        for n in pool:
+            if n["name"].split(",")[0].strip().lower() == name:
+                return n
+        # 2) substring match anywhere in the full name
+        for n in pool:
+            if name in n["name"].lower():
+                return n
+        # 3) any overlap between spoken tokens and the nurse's name tokens
+        tokens = {t for t in name.split() if len(t) > 1}
+        if tokens:
+            for n in pool:
+                nurse_tokens = {t.lower().rstrip(",") for t in n["name"].split()}
+                if tokens & nurse_tokens:
+                    return n
+    return None
+
+
 def _apply_book_nurse(state: dict, args: dict) -> dict:
-    nurse = next((n for n in NURSES if n["id"] == args["nurseId"]), None)
+    nurse = _resolve_nurse(state, args)
+    if nurse is None:
+        # No match — record a placeholder so the tool result can describe the miss.
+        state["booking"] = {
+            "nurseId": args.get("nurseId") or args.get("nurseName") or "unknown",
+            "nurseName": args.get("nurseName") or args.get("nurseId") or "Unknown nurse",
+            "when": args.get("when"),
+            "etaMinutes": None,
+            "error": "nurse_not_found",
+        }
+        return state
     state["booking"] = {
-        "nurseId": args["nurseId"],
-        "nurseName": nurse["name"] if nurse else args["nurseId"],
-        "when": args["when"],
+        "nurseId": nurse["id"],
+        "nurseName": nurse["name"],
+        "when": args.get("when"),
         "etaMinutes": _haversine_minutes(
             (state["location"]["lat"], state["location"]["lng"]),
             (nurse["lat"], nurse["lng"]),
-        ) if nurse else None,
+        ),
     }
     return state
 
@@ -389,6 +495,8 @@ TOOL_IMPLS = {
     "update_patient": _apply_update_patient,
     "update_situation": _apply_update_situation,
     "update_preferences": _apply_update_preferences,
+    "update_emergency_contact": _apply_update_emergency_contact,
+    "update_insurance": _apply_update_insurance,
     "search_nurses": _apply_search_nurses,
     "book_nurse": _apply_book_nurse,
 }
@@ -433,17 +541,25 @@ def _execute_tool(state: dict, name: str, args: dict) -> dict:
     impl(state, args)
 
     if name == "book_nurse":
-        return {"ok": True, "booking": state["booking"]}
+        b = state["booking"] or {}
+        if b.get("error") == "nurse_not_found":
+            # Give the LLM enough context to ask the user to clarify.
+            cands = [{"id": n["id"], "name": n["name"]} for n in (state.get("candidates") or [])]
+            return {
+                "ok": False,
+                "error": "nurse_not_found",
+                "candidates": cands,
+                "nextAction": "Tell the caller you didn't catch which nurse they meant and read two or three names from `candidates`. Then ask them to pick one.",
+            }
+        return {"ok": True, "booking": b}
 
-    # For update_* tools, surface what's still missing so the LLM drives intake.
+    # update_* tools: just surface what's still missing.
     missing = _missing_required(state)
     return {
         "ok": True,
         "missingRequired": missing,
         "nextAction": (
-            f"Ask the caller about: {missing[0]['ask']}."
-            if missing
-            else "All required intake is filled. Call search_nurses next."
+            f"Ask about: {missing[0]['ask']}." if missing else "All required info filled. Call search_nurses."
         ),
     }
 
@@ -463,12 +579,26 @@ async def handler(event: Event, context: Context):
             model=context.variables.get("BASETEN_MODEL"),
         )
         state = _get_state(context)
-        context.set_completion_messages([{"role": "system", "content": SYSTEM_PROMPT}])
+        # cache_breakpoint on the system message tells Anthropic to cache everything
+        # up to and including this message, so turns 2+ skip re-reading the prompt.
+        context.set_completion_messages([
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+                "cache_breakpoint": {"ttl": "5m"},
+            }
+        ])
         yield _state_update_event(state)
         yield TextToSpeechEvent(
-            text="Hi, this is the home-nurse dispatch line. Take a breath - what's going on?",
+            text=(
+                "If this is a medical emergency, please hang up and dial 9-1-1 right now. "
+                "Otherwise, this is the nurse dispatcher line — we're here to help fast. "
+                "Looks like it's your first time calling, so let me get a few quick details. "
+                "What's going on?"
+            ),
             voice=VOICE,
             interruptible=True,
+            stream=True,
         )
         return
 
@@ -484,7 +614,6 @@ async def handler(event: Event, context: Context):
 
     # --- Baseten safety classifier (runs before the main LLM loop) ---
     emergency = await baseten.classify_emergency(user_text)
-    yield CustomEvent(name="baseten_classification", data={"baseten": emergency})
     if emergency.get("classification") == "emergency":
         yield TextToSpeechEvent(
             text=(
@@ -499,23 +628,29 @@ async def handler(event: Event, context: Context):
 
     state = _get_state(context)
     messages = context.get_completion_messages() or [
-        {"role": "system", "content": SYSTEM_PROMPT}
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+            "cache_breakpoint": {"ttl": "5m"},
+        }
     ]
     messages.append({"role": "user", "content": user_text})
 
     reply_text: Optional[str] = None
 
-    # Tool-calling loop. Cap iterations so we never spin forever.
-    for _ in range(6):
+    # Two-pass tool loop. At most: (1) one auto-call that may return parallel tool_calls,
+    # (2) one forced reply. `tool_choice="none"` on the last pass guarantees speech.
+    MAX_PASSES = 2
+    for i in range(MAX_PASSES):
+        tool_choice = "none" if i == MAX_PASSES - 1 else "auto"
         response = await generate_chat_completion({
             "provider": "anthropic",
             "model": MODEL,
             "messages": messages,
             "tools": TOOLS,
-            "tool_choice": "auto",
+            "tool_choice": tool_choice,
         })
         msg = response.message  # AssistantMessage
-        # Keep the messages list as dicts end-to-end so later turns re-serialize cleanly.
         messages.append(msg.serialize())
 
         tool_calls = msg.tool_calls or []
@@ -524,7 +659,6 @@ async def handler(event: Event, context: Context):
             break
 
         for tc in tool_calls:
-            # ToolCall.function.arguments is already a dict in primfunctions' wire shape.
             args = tc.function.arguments or {}
             if isinstance(args, str):
                 args = json.loads(args or "{}")
@@ -532,9 +666,8 @@ async def handler(event: Event, context: Context):
             messages.append(ToolResultMessage(
                 tool_call_id=tc.id,
                 name=tc.function.name,
-                content=result,  # ToolResultMessage expects a dict
+                content=result,
             ).serialize())
-            # Mirror state to the UI after every tool call.
             _save_state(context, state)
             yield _state_update_event(state)
 
@@ -542,4 +675,9 @@ async def handler(event: Event, context: Context):
     _save_state(context, state)
 
     if reply_text:
-        yield TextToSpeechEvent(text=reply_text, voice=VOICE, interruptible=True)
+        yield TextToSpeechEvent(
+            text=reply_text,
+            voice=VOICE,
+            interruptible=True,
+            stream=True,
+        )

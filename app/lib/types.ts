@@ -17,6 +17,17 @@ export interface Preferences {
   genderPref?: "f" | "m";
 }
 
+export interface EmergencyContact {
+  name?: string;
+  phone?: string;
+  relationship?: string;
+}
+
+export interface Insurance {
+  provider?: string;
+  memberId?: string;
+}
+
 export interface Location {
   label?: string;
   lat: number;
@@ -50,6 +61,8 @@ export interface AgentState {
   patient: Patient;
   situation: Situation;
   preferences: Preferences;
+  emergencyContact: EmergencyContact;
+  insurance: Insurance;
   location: Location;
   candidates: Nurse[];
   booking: Booking | null;
@@ -59,6 +72,8 @@ export const emptyState = (): AgentState => ({
   patient: {},
   situation: { description: null, issueTags: [], urgency: null },
   preferences: {},
+  emergencyContact: {},
+  insurance: {},
   location: { label: "Downtown SF", lat: 37.7749, lng: -122.4194 },
   candidates: [],
   booking: null,
