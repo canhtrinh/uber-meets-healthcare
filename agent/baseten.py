@@ -15,14 +15,14 @@ from openai import AsyncOpenAI
 logger = logging.getLogger(__name__)
 
 _client: AsyncOpenAI | None = None
-_model: str = "meta-llama/Llama-3.1-8B-Instruct"
+_model: str = "deepseek-ai/DeepSeek-V3.1"
 
 
 def configure(api_key: str, model: str | None = None) -> None:
     """Call once from StartEvent with values from context.variables."""
     global _client, _model
     _client = AsyncOpenAI(
-        base_url="https://model.api.baseten.co/v1",
+        base_url="https://inference.baseten.co/v1",
         api_key=api_key,
     )
     if model:
