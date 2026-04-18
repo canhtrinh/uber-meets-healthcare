@@ -22,7 +22,7 @@ def configure(api_key: str, model: str | None = None) -> None:
     """Call once from StartEvent with values from context.variables."""
     global _client, _model
     _client = AsyncOpenAI(
-        base_url="https://inference.baseten.co/v1",
+        base_url="https://model.api.baseten.co/v1",
         api_key=api_key,
     )
     if model:
