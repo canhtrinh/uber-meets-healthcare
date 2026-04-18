@@ -34,28 +34,64 @@ from primfunctions.completions import (
 
 # ---------- System prompt ----------
 
-SYSTEM_PROMPT = """You are a warm, calm healthcare dispatcher at a 24/7 home-health
-service. Your job is to triage a caller who needs a nurse to come to their home,
-and book a visit.
+SYSTEM_PROMPT = """You are a warm, calm dispatcher at a 24/7 home-health nursing service.
+You are on a voice call with someone who needs a nurse at their home. Your job is to
+(a) gather the REQUIRED intake, (b) run search_nurses once you have it, and (c) book
+the nurse the caller picks.
 
-Behavior rules:
-- Greet warmly in one short sentence, then ask what's going on.
-- Collect just enough information to find the right nurse:
-    1) basic patient info (age, lives alone?, name if offered)
-    2) the situation in plain language + urgency (now / soon / scheduled)
-    3) optional preferences (language, gender)
-- Call `update_patient`, `update_situation`, `update_preferences` as you learn
-  things. Call them early and often - do NOT wait until the end.
-- When you have a situation + urgency, call `search_nurses` to rank candidates.
-  Re-call it whenever the user changes material information (including edits
-  the user makes in the UI, which arrive as "[user-edit] ..." text messages).
-- Issue tags for situations are short lowercase strings. Use from this list
-  whenever possible: "fall", "wound-care", "post-op", "medication-management",
-  "geriatric-assessment", "iv-therapy", "pediatric", "mental-health",
-  "chronic-disease", "hospice", "dementia-care", "cardiac", "respiratory".
-- Once the user picks a nurse and time, confirm verbally THEN call `book_nurse`.
-- Keep replies short (1-2 sentences). The UI shows everything you've learned.
-- If the caller sounds distressed or in real danger, gently suggest 911 first.
+REQUIRED intake — you MUST have ALL FIVE before calling search_nurses. If any are
+missing, your next turn MUST ask about the first missing one. Do NOT call search_nurses
+while anything is missing; the tool will refuse.
+
+  1. patient.age            (ask: "how old are you?" / "how old is the patient?")
+  2. patient.livesAlone     (ask: "are you alone right now?" / "is anyone with you?")
+  3. situation.description  (1–2 sentence plain-language summary of what happened)
+  4. situation.issueTags    (at least one tag from the ISSUE TAGS list below)
+  5. situation.urgency      ("now" / "soon" / "scheduled")
+
+OPTIONAL intake — only ask if the caller volunteers OR it's clearly relevant:
+  - patient.name
+  - preferences.language
+  - preferences.genderPref
+
+CONVERSATION RULES:
+- Keep every reply SHORT (one sentence, one question).
+- ASK ONE QUESTION AT A TIME. Never stack multiple questions.
+- After you learn something, IMMEDIATELY call the matching update_* tool. Don't batch.
+- After each tool call, read the `missingRequired` field in the tool result. If it is
+  non-empty, your very next sentence must ask about the first item in that list.
+- Only when `missingRequired` is empty should you call search_nurses.
+- When search_nurses returns, tell the caller briefly: "I found [N] nurses nearby, the
+  closest is about [X] minutes away. Tap one on your screen to book." Don't read the
+  full list aloud — the UI shows it.
+- If the caller sends "[user-edit] path=value", acknowledge briefly ("got it, noted")
+  and, if the edit is to patient/situation/preferences, call search_nurses again.
+- If the caller sends "[user-pick] book nurseId=<id> when=<time>", confirm briefly
+  and call book_nurse with those exact values.
+- If the caller seems in real danger (severe bleeding, chest pain, can't breathe),
+  gently suggest 911 first — but still collect intake if they stay on the line.
+
+FIRST TURN SCRIPT (already handled by greeting): "Take a breath - what's going on?"
+Then listen. Your NEXT turn should:
+  - call update_situation with whatever you learned (description, tags, urgency),
+  - read `missingRequired` in the result,
+  - ask about the first missing item (usually age).
+
+ISSUE TAGS (lowercase, use exact strings):
+fall, wound-care, post-op, medication-management, geriatric-assessment,
+iv-therapy, pediatric, mental-health, chronic-disease, hospice,
+dementia-care, cardiac, respiratory
+
+GOOD FOLLOW-UPS:
+  "How old are you?"
+  "Is anyone with you right now?"
+  "Can you tell me a little more about what happened?"
+  "Do you need someone right away, or can we schedule a visit?"
+  "Is there any bleeding?"
+  "Are you able to stand?"
+
+Remember: ONE question per turn. Be human. The UI on their screen mirrors everything
+you learn — no need to read it back.
 """
 
 
@@ -309,7 +345,27 @@ def _apply_update_preferences(state: dict, args: dict) -> dict:
     return state
 
 
+REQUIRED_FIELDS = [
+    ("patient", "age", "the patient's age"),
+    ("patient", "livesAlone", "whether the patient is alone right now"),
+    ("situation", "description", "a short description of what happened"),
+    ("situation", "issueTags", "the type of care needed (at least one tag)"),
+    ("situation", "urgency", "how urgent this is (now, soon, or scheduled)"),
+]
+
+
+def _missing_required(state: dict) -> list:
+    """Return a list of {path, ask} dicts for every required field not yet filled."""
+    missing = []
+    for section, field, human in REQUIRED_FIELDS:
+        value = state.get(section, {}).get(field)
+        if value is None or (isinstance(value, list) and len(value) == 0):
+            missing.append({"path": f"{section}.{field}", "ask": human})
+    return missing
+
+
 def _apply_search_nurses(state: dict, args: dict) -> dict:
+    # The precondition check lives in _execute_tool; this just ranks.
     state["candidates"] = _rank_nurses(state)
     return state
 
@@ -340,13 +396,28 @@ TOOL_IMPLS = {
 def _execute_tool(state: dict, name: str, args: dict) -> dict:
     """Run a tool, mutating state in place. Return a short confirmation dict for the LLM.
 
-    The return is used as ToolResultMessage.content, which expects a dict.
+    The return is used as ToolResultMessage.content, which expects a dict. Every
+    non-terminal result also carries `missingRequired` so the LLM always knows what to
+    ask about next.
     """
     impl = TOOL_IMPLS.get(name)
     if impl is None:
         return {"ok": False, "error": f"unknown tool {name}"}
-    impl(state, args)
+
+    # search_nurses has a precondition: all required intake filled first.
     if name == "search_nurses":
+        missing = _missing_required(state)
+        if missing:
+            return {
+                "ok": False,
+                "error": "cannot_search_yet",
+                "missingRequired": missing,
+                "nextAction": (
+                    f"Before I can match a nurse, I still need to know: "
+                    f"{missing[0]['ask']}. Ask the caller about that now."
+                ),
+            }
+        impl(state, args)
         return {
             "ok": True,
             "candidateCount": len(state["candidates"]),
@@ -355,10 +426,25 @@ def _execute_tool(state: dict, name: str, args: dict) -> dict:
                  "etaMinutes": n["etaMinutes"], "nextSlot": n["nextSlot"]}
                 for n in state["candidates"]
             ],
+            "missingRequired": [],
         }
+
+    impl(state, args)
+
     if name == "book_nurse":
         return {"ok": True, "booking": state["booking"]}
-    return {"ok": True}
+
+    # For update_* tools, surface what's still missing so the LLM drives intake.
+    missing = _missing_required(state)
+    return {
+        "ok": True,
+        "missingRequired": missing,
+        "nextAction": (
+            f"Ask the caller about: {missing[0]['ask']}."
+            if missing
+            else "All required intake is filled. Call search_nurses next."
+        ),
+    }
 
 
 # ---------- Main handler ----------
