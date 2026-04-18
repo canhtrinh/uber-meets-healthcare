@@ -581,6 +581,9 @@ def _execute_tool(state: dict, name: str, args: dict) -> dict:
 
 MODEL = "claude-haiku-4-5"
 VOICE = "nova"
+# OpenAI voices accept 0.25x–4.0x. 1.2 is noticeably snappier while still natural;
+# bump to 1.25/1.3 if it still feels slow.
+SPEECH_SPEED = 1.2
 
 
 async def handler(event: Event, context: Context):
@@ -612,6 +615,7 @@ async def handler(event: Event, context: Context):
             voice=VOICE,
             interruptible=False,
             stream=True,
+            speed=SPEECH_SPEED,
         )
         return
 
@@ -635,6 +639,7 @@ async def handler(event: Event, context: Context):
                 "Do not wait — call 911 now."
             ),
             voice=VOICE,
+            speed=SPEECH_SPEED,
         )
         return
     # -----------------------------------------------------------------
@@ -693,4 +698,5 @@ async def handler(event: Event, context: Context):
             voice=VOICE,
             interruptible=False,
             stream=True,
+            speed=SPEECH_SPEED,
         )
