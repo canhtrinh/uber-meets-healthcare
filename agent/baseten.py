@@ -78,5 +78,5 @@ async def classify_emergency(text: str) -> dict:
         logger.warning("Baseten classify_emergency timed out")
         return {"classification": "unclear", "reason": "classifier timeout"}
     except Exception as exc:
-        logger.warning("Baseten classify_emergency failed: %s", exc)
-        return {"classification": "unclear", "reason": "classifier unavailable"}
+        logger.warning("Baseten classify_emergency failed: %s: %s", type(exc).__name__, exc)
+        return {"classification": "unclear", "reason": f"{type(exc).__name__}: {exc}"}
