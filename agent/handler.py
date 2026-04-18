@@ -377,6 +377,7 @@ async def handler(event: Event, context: Context):
         yield TextToSpeechEvent(
             text="Hi, this is the home-nurse dispatch line. Take a breath - what's going on?",
             voice=VOICE,
+            interruptible=True,
         )
         return
 
@@ -435,4 +436,4 @@ async def handler(event: Event, context: Context):
     _save_state(context, state)
 
     if reply_text:
-        yield TextToSpeechEvent(text=reply_text, voice=VOICE)
+        yield TextToSpeechEvent(text=reply_text, voice=VOICE, interruptible=True)
