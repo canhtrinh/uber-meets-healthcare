@@ -35,64 +35,24 @@ import baseten
 
 # ---------- System prompt ----------
 
-SYSTEM_PROMPT = """You are a warm, calm dispatcher at a 24/7 home-health nursing service.
-You are on a voice call with someone who needs a nurse at their home. Your job is to
-(a) gather the REQUIRED intake, (b) run search_nurses once you have it, and (c) book
-the nurse the caller picks.
+SYSTEM_PROMPT = """You are a warm, calm dispatcher at a 24/7 home-health nursing service, on a voice call.
 
-REQUIRED intake — you MUST have ALL FIVE before calling search_nurses. If any are
-missing, your next turn MUST ask about the first missing one. Do NOT call search_nurses
-while anything is missing; the tool will refuse.
+Behavior:
+- ONE short question per turn. Phone-call cadence, no lists, no markdown.
+- Call update_patient / update_situation / update_preferences the moment you learn anything. You MAY emit multiple update_* tool_calls in one response when you learn several things at once (parallel tool use is preferred).
+- Every tool result has a `missingRequired` field. If non-empty, your VERY NEXT sentence must ask about the first item.
+- Only call search_nurses when `missingRequired` is empty; it refuses otherwise. After it returns, announce briefly: "I found a few nearby, closest is about X min — tap one to book."
+- "[user-edit] path=value": acknowledge briefly, re-call search_nurses if the edit is material.
+- "[user-pick] book nurseId=X when=Y": call book_nurse with those exact values.
+- Emergency hints (severe bleeding, chest pain, can't breathe, stroke signs): suggest 911 first.
 
-  1. patient.age            (ask: "how old are you?" / "how old is the patient?")
-  2. patient.livesAlone     (ask: "are you alone right now?" / "is anyone with you?")
-  3. situation.description  (1–2 sentence plain-language summary of what happened)
-  4. situation.issueTags    (at least one tag from the ISSUE TAGS list below)
-  5. situation.urgency      ("now" / "soon" / "scheduled")
+Required intake (search_nurses blocks without all five):
+  patient.age, patient.livesAlone,
+  situation.description, situation.issueTags (≥1 tag), situation.urgency ("now" | "soon" | "scheduled").
 
-OPTIONAL intake — only ask if the caller volunteers OR it's clearly relevant:
-  - patient.name
-  - preferences.language
-  - preferences.genderPref
+Issue tags (use exact strings): fall, wound-care, post-op, medication-management, geriatric-assessment, iv-therapy, pediatric, mental-health, chronic-disease, hospice, dementia-care, cardiac, respiratory.
 
-CONVERSATION RULES:
-- Keep every reply SHORT (one sentence, one question).
-- ASK ONE QUESTION AT A TIME. Never stack multiple questions.
-- After you learn something, IMMEDIATELY call the matching update_* tool. Don't batch.
-- After each tool call, read the `missingRequired` field in the tool result. If it is
-  non-empty, your very next sentence must ask about the first item in that list.
-- Only when `missingRequired` is empty should you call search_nurses.
-- When search_nurses returns, tell the caller briefly: "I found [N] nurses nearby, the
-  closest is about [X] minutes away. Tap one on your screen to book." Don't read the
-  full list aloud — the UI shows it.
-- If the caller sends "[user-edit] path=value", acknowledge briefly ("got it, noted")
-  and, if the edit is to patient/situation/preferences, call search_nurses again.
-- If the caller sends "[user-pick] book nurseId=<id> when=<time>", confirm briefly
-  and call book_nurse with those exact values.
-- If the caller seems in real danger (severe bleeding, chest pain, can't breathe),
-  gently suggest 911 first — but still collect intake if they stay on the line.
-
-FIRST TURN SCRIPT (already handled by greeting): "Take a breath - what's going on?"
-Then listen. Your NEXT turn should:
-  - call update_situation with whatever you learned (description, tags, urgency),
-  - read `missingRequired` in the result,
-  - ask about the first missing item (usually age).
-
-ISSUE TAGS (lowercase, use exact strings):
-fall, wound-care, post-op, medication-management, geriatric-assessment,
-iv-therapy, pediatric, mental-health, chronic-disease, hospice,
-dementia-care, cardiac, respiratory
-
-GOOD FOLLOW-UPS:
-  "How old are you?"
-  "Is anyone with you right now?"
-  "Can you tell me a little more about what happened?"
-  "Do you need someone right away, or can we schedule a visit?"
-  "Is there any bleeding?"
-  "Are you able to stand?"
-
-Remember: ONE question per turn. Be human. The UI on their screen mirrors everything
-you learn — no need to read it back.
+The UI mirrors your state — don't read it back unless asked.
 """
 
 
@@ -411,39 +371,34 @@ def _execute_tool(state: dict, name: str, args: dict) -> dict:
         if missing:
             return {
                 "ok": False,
-                "error": "cannot_search_yet",
                 "missingRequired": missing,
-                "nextAction": (
-                    f"Before I can match a nurse, I still need to know: "
-                    f"{missing[0]['ask']}. Ask the caller about that now."
-                ),
+                "nextAction": f"Ask about: {missing[0]['ask']}.",
             }
         impl(state, args)
+        candidates = state["candidates"]
+        # Keep the LLM-visible payload tiny: count + closest ETA. The full list
+        # is already on the UI via CustomEvent.
+        closest = candidates[0]["etaMinutes"] if candidates else None
         return {
             "ok": True,
-            "candidateCount": len(state["candidates"]),
-            "topCandidates": [
-                {"id": n["id"], "name": n["name"],
-                 "etaMinutes": n["etaMinutes"], "nextSlot": n["nextSlot"]}
-                for n in state["candidates"]
-            ],
+            "count": len(candidates),
+            "closestEtaMin": closest,
             "missingRequired": [],
         }
 
     impl(state, args)
 
     if name == "book_nurse":
-        return {"ok": True, "booking": state["booking"]}
+        b = state["booking"] or {}
+        return {"ok": True, "nurseName": b.get("nurseName"), "when": b.get("when")}
 
-    # For update_* tools, surface what's still missing so the LLM drives intake.
+    # update_* tools: just surface what's still missing.
     missing = _missing_required(state)
     return {
         "ok": True,
         "missingRequired": missing,
         "nextAction": (
-            f"Ask the caller about: {missing[0]['ask']}."
-            if missing
-            else "All required intake is filled. Call search_nurses next."
+            f"Ask about: {missing[0]['ask']}." if missing else "All required info filled. Call search_nurses."
         ),
     }
 
@@ -463,12 +418,21 @@ async def handler(event: Event, context: Context):
             model=context.variables.get("BASETEN_MODEL"),
         )
         state = _get_state(context)
-        context.set_completion_messages([{"role": "system", "content": SYSTEM_PROMPT}])
+        # cache_breakpoint on the system message tells Anthropic to cache everything
+        # up to and including this message, so turns 2+ skip re-reading the prompt.
+        context.set_completion_messages([
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+                "cache_breakpoint": {"ttl": "5m"},
+            }
+        ])
         yield _state_update_event(state)
         yield TextToSpeechEvent(
             text="Hi, this is the home-nurse dispatch line. Take a breath - what's going on?",
             voice=VOICE,
             interruptible=True,
+            stream=True,
         )
         return
 
@@ -498,23 +462,29 @@ async def handler(event: Event, context: Context):
 
     state = _get_state(context)
     messages = context.get_completion_messages() or [
-        {"role": "system", "content": SYSTEM_PROMPT}
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+            "cache_breakpoint": {"ttl": "5m"},
+        }
     ]
     messages.append({"role": "user", "content": user_text})
 
     reply_text: Optional[str] = None
 
-    # Tool-calling loop. Cap iterations so we never spin forever.
-    for _ in range(6):
+    # Two-pass tool loop. At most: (1) one auto-call that may return parallel tool_calls,
+    # (2) one forced reply. `tool_choice="none"` on the last pass guarantees speech.
+    MAX_PASSES = 2
+    for i in range(MAX_PASSES):
+        tool_choice = "none" if i == MAX_PASSES - 1 else "auto"
         response = await generate_chat_completion({
             "provider": "anthropic",
             "model": MODEL,
             "messages": messages,
             "tools": TOOLS,
-            "tool_choice": "auto",
+            "tool_choice": tool_choice,
         })
         msg = response.message  # AssistantMessage
-        # Keep the messages list as dicts end-to-end so later turns re-serialize cleanly.
         messages.append(msg.serialize())
 
         tool_calls = msg.tool_calls or []
@@ -523,7 +493,6 @@ async def handler(event: Event, context: Context):
             break
 
         for tc in tool_calls:
-            # ToolCall.function.arguments is already a dict in primfunctions' wire shape.
             args = tc.function.arguments or {}
             if isinstance(args, str):
                 args = json.loads(args or "{}")
@@ -531,9 +500,8 @@ async def handler(event: Event, context: Context):
             messages.append(ToolResultMessage(
                 tool_call_id=tc.id,
                 name=tc.function.name,
-                content=result,  # ToolResultMessage expects a dict
+                content=result,
             ).serialize())
-            # Mirror state to the UI after every tool call.
             _save_state(context, state)
             yield _state_update_event(state)
 
@@ -541,4 +509,9 @@ async def handler(event: Event, context: Context):
     _save_state(context, state)
 
     if reply_text:
-        yield TextToSpeechEvent(text=reply_text, voice=VOICE, interruptible=True)
+        yield TextToSpeechEvent(
+            text=reply_text,
+            voice=VOICE,
+            interruptible=True,
+            stream=True,
+        )
