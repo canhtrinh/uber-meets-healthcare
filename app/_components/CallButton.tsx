@@ -20,6 +20,9 @@ export function CallButton() {
   const [muted, setMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const startedAt = useRef<number | null>(null);
+  // Tracks whether we ever saw isConnected === true during this call so we can
+  // distinguish "still connecting" from "WS dropped after being up".
+  const wasConnected = useRef(false);
 
   // Clean up mic/socket when the component unmounts.
   useEffect(() => {
@@ -30,11 +33,9 @@ export function CallButton() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Drive the call timer while the line is live.
+  // Start the call timer only once the WS is actually up.
   useEffect(() => {
-    if (!inCall) {
-      setSeconds(0);
-      startedAt.current = null;
+    if (!inCall || !isConnected) {
       return;
     }
     if (startedAt.current == null) startedAt.current = Date.now();
@@ -44,11 +45,19 @@ export function CallButton() {
       }
     }, 500);
     return () => clearInterval(t);
-  }, [inCall]);
+  }, [inCall, isConnected]);
 
-  // If the WS drops unexpectedly, reset the UI so the user can redial.
+  // Track the "was connected then dropped" transition, and only then reset the UI.
   useEffect(() => {
-    if (inCall && !isConnected && startedAt.current != null) {
+    if (isConnected) {
+      wasConnected.current = true;
+      return;
+    }
+    if (inCall && wasConnected.current) {
+      // WS was up, now it's gone — treat as hangup.
+      wasConnected.current = false;
+      startedAt.current = null;
+      setSeconds(0);
       setInCall(false);
       setMuted(false);
     }
@@ -79,6 +88,9 @@ export function CallButton() {
   const endCall = () => {
     stopListening();
     disconnect();
+    wasConnected.current = false;
+    startedAt.current = null;
+    setSeconds(0);
     setInCall(false);
     setMuted(false);
   };
