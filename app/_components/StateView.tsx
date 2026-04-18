@@ -19,6 +19,8 @@ export function StateView({ state, onEdit }: Props) {
     <div className="space-y-3">
       <PatientCard state={state} onEdit={onEdit} />
       <SituationCard state={state} onEdit={onEdit} />
+      <EmergencyContactCard state={state} onEdit={onEdit} />
+      <InsuranceCard state={state} onEdit={onEdit} />
       <PreferencesCard state={state} onEdit={onEdit} />
     </div>
   );
@@ -53,12 +55,14 @@ function EditableField({
   placeholder,
   onCommit,
   inputType = "text",
+  required = false,
 }: {
   label: string;
   value: string | number | undefined;
   placeholder?: string;
   onCommit: (next: string) => void;
-  inputType?: "text" | "number";
+  inputType?: "text" | "number" | "tel";
+  required?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value == null ? "" : String(value));
@@ -89,6 +93,7 @@ function EditableField({
     );
   }
 
+  const unset = value == null || value === "";
   return (
     <button
       onClick={() => {
@@ -98,9 +103,10 @@ function EditableField({
       className="flex items-center gap-2 text-sm w-full text-left rounded-md px-1 -mx-1 py-0.5 hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
     >
       <span className="w-28 text-zinc-500">{label}</span>
-      <span className={value == null ? "text-zinc-400 italic" : ""}>
-        {value == null ? placeholder ?? "—" : String(value)}
+      <span className={unset ? "text-zinc-400 italic flex-1" : "flex-1"}>
+        {unset ? placeholder ?? "—" : String(value)}
       </span>
+      {required && unset && <RequiredPill />}
     </button>
   );
 }
@@ -115,13 +121,15 @@ function PatientCard({ state, onEdit }: Props) {
         <EditableField
           label="Name"
           value={patient.name}
-          placeholder="not given"
+          placeholder="needed"
+          required={!patient.name}
           onCommit={(v) => onEdit("patient.name", v)}
         />
         <EditableField
           label="Age"
           value={patient.age}
-          placeholder="unknown"
+          placeholder="needed"
+          required={patient.age == null}
           inputType="number"
           onCommit={(v) => {
             const n = Number(v);
@@ -142,9 +150,74 @@ function PatientCard({ state, onEdit }: Props) {
             onClick={() => onEdit("patient.livesAlone", false)}
             active={patient.livesAlone === false}
           />
+          {patient.livesAlone == null && <RequiredPill />}
         </div>
       </div>
     </Card>
+  );
+}
+
+function EmergencyContactCard({ state, onEdit }: Props) {
+  const ec = state.emergencyContact;
+  const empty = !ec.name && !ec.phone && !ec.relationship;
+  return (
+    <Card title="Emergency contact" empty={empty}>
+      <div className="space-y-1">
+        <EditableField
+          label="Name"
+          value={ec.name}
+          placeholder="needed"
+          required={!ec.name}
+          onCommit={(v) => onEdit("emergencyContact.name", v)}
+        />
+        <EditableField
+          label="Phone"
+          value={ec.phone}
+          placeholder="needed"
+          required={!ec.phone}
+          inputType="tel"
+          onCommit={(v) => onEdit("emergencyContact.phone", v)}
+        />
+        <EditableField
+          label="Relationship"
+          value={ec.relationship}
+          placeholder="optional (e.g. daughter)"
+          onCommit={(v) => onEdit("emergencyContact.relationship", v)}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function InsuranceCard({ state, onEdit }: Props) {
+  const ins = state.insurance;
+  const empty = !ins.provider && !ins.memberId;
+  return (
+    <Card title="Insurance" empty={empty}>
+      <div className="space-y-1">
+        <EditableField
+          label="Provider"
+          value={ins.provider}
+          placeholder="needed (e.g. Medicare, Kaiser)"
+          required={!ins.provider}
+          onCommit={(v) => onEdit("insurance.provider", v)}
+        />
+        <EditableField
+          label="Member ID"
+          value={ins.memberId}
+          placeholder="optional"
+          onCommit={(v) => onEdit("insurance.memberId", v)}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function RequiredPill() {
+  return (
+    <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+      needed
+    </span>
   );
 }
 

@@ -8,6 +8,8 @@ import {
   type Urgency,
   type Preferences,
   type Patient,
+  type EmergencyContact,
+  type Insurance,
 } from "../lib/types";
 
 /**
@@ -102,6 +104,26 @@ function applyEdit(state: AgentState, path: string, value: unknown): AgentState 
         (preferences as any)[field] = value;
       }
       return { ...state, preferences };
+    }
+    case "emergencyContact": {
+      const ec: EmergencyContact = { ...state.emergencyContact };
+      if (value === null || value === undefined || value === "") {
+        delete ec[field as keyof EmergencyContact];
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (ec as any)[field] = value;
+      }
+      return { ...state, emergencyContact: ec };
+    }
+    case "insurance": {
+      const ins: Insurance = { ...state.insurance };
+      if (value === null || value === undefined || value === "") {
+        delete ins[field as keyof Insurance];
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (ins as any)[field] = value;
+      }
+      return { ...state, insurance: ins };
     }
     default:
       return state;

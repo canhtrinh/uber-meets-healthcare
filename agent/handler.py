@@ -37,69 +37,73 @@ import baseten
 
 SYSTEM_PROMPT = """You are a warm, calm dispatcher at a 24/7 home-health nursing service.
 You are on a voice call with someone who needs a nurse at their home. Your job is to
-(a) gather the REQUIRED intake, (b) run search_nurses once you have it, and (c) book
-the nurse the caller picks.
+(a) gather the REQUIRED intake, (b) run search_nurses the MOMENT intake is complete,
+(c) book the nurse the caller picks.
 
-REQUIRED intake — you MUST have ALL FIVE before calling search_nurses. If any are
-missing, your next turn MUST ask about the first missing one. Do NOT call search_nurses
-while anything is missing; the tool will refuse.
+REQUIRED intake — you MUST have ALL NINE before calling search_nurses. The tool
+will refuse if anything is missing.
 
-  1. patient.age            (ask: "how old are you?" / "how old is the patient?")
-  2. patient.livesAlone     (ask: "are you alone right now?" / "is anyone with you?")
-  3. situation.description  (1–2 sentence plain-language summary of what happened)
-  4. situation.issueTags    (at least one tag from the ISSUE TAGS list below)
-  5. situation.urgency      ("now" / "soon" / "scheduled")
+  1. patient.name               (ask: "what's your name?" / "who am I speaking with?")
+  2. patient.age                (ask: "how old are you?")
+  3. patient.livesAlone         (ask: "are you alone right now?" / "is anyone with you?")
+  4. situation.description      (plain-language summary of what happened)
+  5. situation.issueTags        (at least one tag from the ISSUE TAGS list)
+  6. situation.urgency          ("now" / "soon" / "scheduled")
+  7. emergencyContact.name      (ask: "who should we call if anything goes wrong?")
+  8. emergencyContact.phone     (ask: "what's their phone number?")
+  9. insurance.provider         (ask: "what health insurance do you have?")
 
-OPTIONAL intake — only ask if the caller volunteers OR it's clearly relevant:
-  - patient.name
-  - preferences.language
-  - preferences.genderPref
+OPTIONAL (ask only if caller volunteers OR clearly relevant):
+  - emergencyContact.relationship (e.g. daughter, spouse)
+  - insurance.memberId           (don't make them read long IDs over voice)
+  - preferences.language, preferences.genderPref
 
 CONVERSATION RULES:
-- Keep every reply SHORT (one sentence, one question).
-- ASK ONE QUESTION AT A TIME. Never stack multiple questions.
+- ONE short question per turn. Phone-call cadence, no lists, no markdown, no stacked
+  questions.
 - After you learn something, IMMEDIATELY call the matching update_* tool. You MAY
-  emit multiple update_* tool_calls in one response when you learn several things
-  at once — parallel tool use is preferred.
-- After each tool call, read the `missingRequired` field in the tool result. If it is
-  non-empty, your very next sentence must ask about the first item in that list.
-- Only when `missingRequired` is empty should you call search_nurses.
-- When search_nurses returns, the result includes `topCandidates` with each nurse's
-  id, name, ETA, and next slot. Use it to reference nurses by name and resolve
-  "book Sarah Chen" to the right nurseId. Announce briefly to the caller: "I found
-  [N] nurses nearby, the closest is about [X] minutes away. Tap one on your screen
-  to book." Don't read the full list aloud — the UI shows it.
-- If the caller sends "[user-edit] path=value", acknowledge briefly ("got it, noted")
-  and, if the edit is to patient/situation/preferences, call search_nurses again.
-- If the caller sends "[user-pick] book nurseId=<id> when=<time>", confirm briefly
-  and call book_nurse with those exact values.
-- If the caller asks to book by name ("book Sarah Chen"), prefer passing the matching
-  nurseId from the last search_nurses result; if unsure, pass nurseName and the
-  server will fuzzy-match.
-- If the caller seems in real danger (severe bleeding, chest pain, can't breathe),
-  gently suggest 911 first — but still collect intake if they stay on the line.
+  emit multiple update_* tool_calls in a single response when the caller shares
+  several things at once — parallel tool use is PREFERRED, it cuts turn latency.
+- After every tool call, read the `missingRequired` field in the result. If it is
+  non-empty, your very next sentence asks about the FIRST item in that list.
+- The moment `missingRequired` is EMPTY, call search_nurses in the SAME response.
+  Do NOT announce "I'll find nurses now" as its own turn. Do NOT ask the caller for
+  permission — just call it. The UI will show the results the moment it returns.
+- When search_nurses returns, its result includes `topCandidates` with each nurse's
+  id, name, ETA, and next slot. Use that to map a spoken name ("book Sarah Chen")
+  to the right nurseId. Announce ONE sentence: "Found a few nurses nearby, closest
+  is about [X] min — tap one on your screen, or tell me who to book."
+- "[user-edit] path=value": acknowledge briefly ("got it"), then if the edit is to
+  patient/situation/preferences/emergencyContact/insurance, re-call search_nurses
+  so the ranking refreshes.
+- "[user-pick] book nurseId=<id> when=<time>": confirm briefly and call book_nurse
+  with those exact values.
+- "book <name>" spoken: prefer the matching nurseId from the last search_nurses
+  result; if you can't resolve it, pass nurseName and the server will fuzzy-match.
+- Real danger signs (severe bleeding, chest pain, can't breathe, stroke symptoms):
+  gently suggest 911 first — but stay on the line and keep gathering intake.
 
-FIRST TURN SCRIPT (already handled by greeting): "Take a breath - what's going on?"
-Then listen. Your NEXT turn should:
-  - call update_situation with whatever you learned (description, tags, urgency),
-  - read `missingRequired` in the result,
-  - ask about the first missing item (usually age).
+FIRST TURN SCRIPT (already spoken as the greeting): the caller just heard the 911
+disclaimer + "what's going on?" Your next turn reacts to whatever they say. Start
+with update_situation for the situation they describe, then ask about the first
+missing required field (usually their name).
 
-ISSUE TAGS (lowercase, use exact strings):
+ISSUE TAGS (lowercase, exact strings):
 fall, wound-care, post-op, medication-management, geriatric-assessment,
 iv-therapy, pediatric, mental-health, chronic-disease, hospice,
 dementia-care, cardiac, respiratory
 
 GOOD FOLLOW-UPS:
+  "What's your name?"
   "How old are you?"
   "Is anyone with you right now?"
-  "Can you tell me a little more about what happened?"
-  "Do you need someone right away, or can we schedule a visit?"
-  "Is there any bleeding?"
-  "Are you able to stand?"
+  "Can you tell me a bit more about what happened?"
+  "Do you need someone right away, or is this something we can schedule?"
+  "Who should I call if anything goes wrong — what's their name and number?"
+  "What insurance do you have?"
 
-Remember: ONE question per turn. Be human. The UI on their screen mirrors everything
-you learn — no need to read it back.
+Remember: ONE question per turn. Be human. The UI mirrors your state — no need to
+read it back.
 """
 
 
@@ -178,6 +182,8 @@ def _empty_state() -> dict:
         "patient": {},
         "situation": {"description": None, "issueTags": [], "urgency": None},
         "preferences": {},
+        "emergencyContact": {},
+        "insurance": {},
         "location": DEFAULT_LOCATION.copy(),
         "candidates": [],
         "booking": None,
@@ -302,6 +308,35 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "update_emergency_contact",
+            "description": "Record the patient's emergency contact — someone to reach if something goes wrong. Call as soon as you learn a name or phone number. Both name AND phone are required before search_nurses can run; relationship is optional.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Emergency contact's name"},
+                    "phone": {"type": "string", "description": "Emergency contact's phone number, any readable format"},
+                    "relationship": {"type": "string", "description": "Optional — e.g. 'daughter', 'spouse', 'neighbor'"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_insurance",
+            "description": "Record the patient's health insurance. Provider name is required before search_nurses; memberId is optional and only worth collecting if the caller volunteers it (don't make them read a long ID over voice).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "provider": {"type": "string", "description": "Insurance provider (e.g. 'Medicare', 'Blue Cross', 'Kaiser', 'Aetna')"},
+                    "memberId": {"type": "string", "description": "Optional member/policy ID"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_nurses",
             "description": "Rank nurses for the current patient+situation. Returns top matches filtered by issue tags, urgency and preferences, ranked by ETA. Call this once you have enough info, and again after any material change.",
             "parameters": {"type": "object", "properties": {}},
@@ -354,12 +389,32 @@ def _apply_update_preferences(state: dict, args: dict) -> dict:
     return state
 
 
+def _apply_update_emergency_contact(state: dict, args: dict) -> dict:
+    ec = state.setdefault("emergencyContact", {})
+    for k in ("name", "phone", "relationship"):
+        if args.get(k):
+            ec[k] = args[k]
+    return state
+
+
+def _apply_update_insurance(state: dict, args: dict) -> dict:
+    ins = state.setdefault("insurance", {})
+    for k in ("provider", "memberId"):
+        if args.get(k):
+            ins[k] = args[k]
+    return state
+
+
 REQUIRED_FIELDS = [
+    ("patient", "name", "the patient's name"),
     ("patient", "age", "the patient's age"),
     ("patient", "livesAlone", "whether the patient is alone right now"),
     ("situation", "description", "a short description of what happened"),
     ("situation", "issueTags", "the type of care needed (at least one tag)"),
     ("situation", "urgency", "how urgent this is (now, soon, or scheduled)"),
+    ("emergencyContact", "name", "the emergency contact's name"),
+    ("emergencyContact", "phone", "the emergency contact's phone number"),
+    ("insurance", "provider", "their insurance provider"),
 ]
 
 
@@ -440,6 +495,8 @@ TOOL_IMPLS = {
     "update_patient": _apply_update_patient,
     "update_situation": _apply_update_situation,
     "update_preferences": _apply_update_preferences,
+    "update_emergency_contact": _apply_update_emergency_contact,
+    "update_insurance": _apply_update_insurance,
     "search_nurses": _apply_search_nurses,
     "book_nurse": _apply_book_nurse,
 }
