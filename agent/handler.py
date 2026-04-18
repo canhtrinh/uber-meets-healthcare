@@ -10,6 +10,7 @@ Every tool mutates a single `state` blob in context, then emits a
 CustomEvent("state_update") so the browser can render a mirrored view.
 """
 
+import datetime as _dt
 import json
 import math
 from typing import Optional
@@ -56,6 +57,27 @@ Behavior rules:
 - Once the user picks a nurse and time, confirm verbally THEN call `book_nurse`.
 - Keep replies short (1-2 sentences). The UI shows everything you've learned.
 - If the caller sounds distressed or in real danger, gently suggest 911 first.
+
+Visual context (photos):
+- Whenever the caller mentions ANYTHING visual - an injury, swelling, rash,
+  wound, bruise, deformity, an x-ray, an insurance card, an ID, a prescription
+  bottle, a discharge document, a medication label - briefly offer to see a
+  photo and call `request_photo` with an appropriate `kind` and a short
+  human-friendly `prompt` like "your knee" or "your insurance card".
+- Only call `request_photo` ONCE per item. Don't pester. The UI will show a
+  camera box; the user may also decline.
+- After a photo arrives (it comes in as a user message containing the actual
+  image), inspect it and:
+    * If it's an insurance card, call `update_insurance` with whatever fields
+      you can read (insurer, memberId, groupNumber, planType).
+    * If it's a body part / symptom photo, call `update_symptom_observation`
+      with the area (e.g. "left knee") and a one-line clinical-style finding
+      (e.g. "moderate swelling and erythema over the medial joint line").
+      Also call `update_situation` to refine `issueTags` / `description` if
+      the photo changes your understanding.
+    * If it's any other document, summarise it briefly in the spoken reply.
+- Never claim a diagnosis. Describe what you see and recommend the nurse
+  evaluates in person.
 """
 
 
@@ -137,6 +159,10 @@ def _empty_state() -> dict:
         "location": DEFAULT_LOCATION.copy(),
         "candidates": [],
         "booking": None,
+        # Visual-context additions:
+        "photoRequest": None,        # { kind, prompt, requestedAt } or None
+        "insurance": {},             # { insurer, memberId, groupNumber, planType }
+        "symptomObservations": [],   # [{ area, findings }]
     }
 
 
@@ -155,6 +181,24 @@ def _save_state(context: Context, state: dict) -> None:
 def _state_update_event(state: dict) -> CustomEvent:
     # Single place that mirrors the canonical state to the browser.
     return CustomEvent(name="state_update", data={"state": state})
+
+
+def _parse_photo_event(text: str) -> tuple[str, str]:
+    """Parse "[user-photo] kind=<k> data=<base64>" into (kind, base64).
+
+    Order is fixed to keep parsing trivial despite base64 containing '='.
+    """
+    kind = "other"
+    b64 = ""
+    body = text[len("[user-photo]"):].strip()
+    # kind=<k> data=<everything-after>
+    if body.startswith("kind="):
+        rest = body[len("kind="):]
+        sp = rest.find(" data=")
+        if sp != -1:
+            kind = rest[:sp].strip() or "other"
+            b64 = rest[sp + len(" data="):].strip()
+    return kind, b64
 
 
 # ---------- Matching ----------
@@ -278,6 +322,66 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_photo",
+            "description": (
+                "Show the user a camera box so they can send a photo. Call this whenever the caller mentions "
+                "something visual (injury, rash, wound, swelling, x-ray, insurance card, ID, prescription bottle, "
+                "discharge papers, medication label). Don't ask twice for the same thing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["insurance", "symptom", "document", "other"],
+                        "description": "What category of photo you're asking for.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Short human-friendly subject shown in the UI, e.g. 'your knee', 'your insurance card', 'the prescription bottle'.",
+                    },
+                },
+                "required": ["kind", "prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_insurance",
+            "description": "Record fields read from an insurance card photo. All fields optional; partial merges are fine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "insurer": {"type": "string", "description": "Carrier name, e.g. 'Blue Shield of California'"},
+                    "memberId": {"type": "string"},
+                    "groupNumber": {"type": "string"},
+                    "planType": {"type": "string", "description": "e.g. PPO, HMO, EPO, Medicare Advantage"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_symptom_observation",
+            "description": (
+                "Record a brief clinical-style observation about something visible in a symptom photo. "
+                "Append-only; call once per distinct observation. Never diagnose."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "area": {"type": "string", "description": "Body area, e.g. 'left knee', 'right forearm'"},
+                    "findings": {"type": "string", "description": "One-line description, e.g. 'moderate swelling and erythema over the medial joint line'"},
+                },
+                "required": ["area", "findings"],
+            },
+        },
+    },
 ]
 
 
@@ -328,12 +432,40 @@ def _apply_book_nurse(state: dict, args: dict) -> dict:
     return state
 
 
+def _apply_request_photo(state: dict, args: dict) -> dict:
+    state["photoRequest"] = {
+        "kind": args.get("kind", "other"),
+        "prompt": args.get("prompt", "a photo"),
+        "requestedAt": _dt.datetime.utcnow().isoformat() + "Z",
+    }
+    return state
+
+
+def _apply_update_insurance(state: dict, args: dict) -> dict:
+    for k in ("insurer", "memberId", "groupNumber", "planType"):
+        v = args.get(k)
+        if v:
+            state["insurance"][k] = v
+    return state
+
+
+def _apply_update_symptom_observation(state: dict, args: dict) -> dict:
+    area = args.get("area")
+    findings = args.get("findings")
+    if area and findings:
+        state["symptomObservations"].append({"area": area, "findings": findings})
+    return state
+
+
 TOOL_IMPLS = {
     "update_patient": _apply_update_patient,
     "update_situation": _apply_update_situation,
     "update_preferences": _apply_update_preferences,
     "search_nurses": _apply_search_nurses,
     "book_nurse": _apply_book_nurse,
+    "request_photo": _apply_request_photo,
+    "update_insurance": _apply_update_insurance,
+    "update_symptom_observation": _apply_update_symptom_observation,
 }
 
 
@@ -358,6 +490,12 @@ def _execute_tool(state: dict, name: str, args: dict) -> dict:
         }
     if name == "book_nurse":
         return {"ok": True, "booking": state["booking"]}
+    if name == "request_photo":
+        return {"ok": True, "photoRequest": state["photoRequest"]}
+    if name == "update_insurance":
+        return {"ok": True, "insurance": state["insurance"]}
+    if name == "update_symptom_observation":
+        return {"ok": True, "observationCount": len(state["symptomObservations"])}
     return {"ok": True}
 
 
@@ -394,45 +532,118 @@ async def handler(event: Event, context: Context):
     messages = context.get_completion_messages() or [
         {"role": "system", "content": SYSTEM_PROMPT}
     ]
-    messages.append({"role": "user", "content": user_text})
 
-    reply_text: Optional[str] = None
-
-    # Tool-calling loop. Cap iterations so we never spin forever.
-    for _ in range(6):
-        response = await generate_chat_completion({
-            "provider": "anthropic",
-            "model": MODEL,
-            "messages": messages,
-            "tools": TOOLS,
-            "tool_choice": "auto",
-        })
-        msg = response.message  # AssistantMessage
-        # Keep the messages list as dicts end-to-end so later turns re-serialize cleanly.
-        messages.append(msg.serialize())
-
-        tool_calls = msg.tool_calls or []
-        if not tool_calls:
-            reply_text = msg.content
-            break
-
-        for tc in tool_calls:
-            # ToolCall.function.arguments is already a dict in primfunctions' wire shape.
-            args = tc.function.arguments or {}
-            if isinstance(args, str):
-                args = json.loads(args or "{}")
-            result = _execute_tool(state, tc.function.name, args)
-            messages.append(ToolResultMessage(
-                tool_call_id=tc.id,
-                name=tc.function.name,
-                content=result,  # ToolResultMessage expects a dict
-            ).serialize())
-            # Mirror state to the UI after every tool call.
+    # ---- Photo intake -----------------------------------------------------
+    # The browser ships images over the only available channel - text events.
+    # Format: "[user-photo] kind=<k> data=<base64-jpeg>"
+    if user_text.startswith("[user-cancel-photo]"):
+        if state.get("photoRequest") is not None:
+            state["photoRequest"] = None
             _save_state(context, state)
             yield _state_update_event(state)
+        # Tell the LLM the user declined so it can move on without re-asking.
+        messages.append({
+            "role": "user",
+            "content": "[system-note] User declined to send a photo. Move on without it.",
+        })
+    elif user_text.startswith("[user-photo]"):
+        kind, b64 = _parse_photo_event(user_text)
+        if not b64:
+            # Malformed - treat as a cancel so the UI doesn't get stuck.
+            state["photoRequest"] = None
+            _save_state(context, state)
+            yield _state_update_event(state)
+            return
+        # Clear the pending request immediately so the camera box closes.
+        state["photoRequest"] = None
+        _save_state(context, state)
+        yield _state_update_event(state)
+        # Hand the image to the LLM as an Anthropic multimodal user message.
+        messages.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": b64,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        f"Here is the photo of {kind}. Read everything you can "
+                        "and call the appropriate update tool(s). Then say one "
+                        "short spoken sentence summarising what you saw."
+                    ),
+                },
+            ],
+        })
+    else:
+        messages.append({"role": "user", "content": user_text})
+
+    reply_text: Optional[str] = None
+    error_text: Optional[str] = None
+
+    # Tool-calling loop. Cap iterations so we never spin forever. Wrap the
+    # whole loop in try/except so a downstream LLM/proxy failure (e.g. an
+    # oversized multimodal request) still produces a spoken apology instead
+    # of leaving the call dead-quiet.
+    try:
+        for _ in range(6):
+            response = await generate_chat_completion({
+                "provider": "anthropic",
+                "model": MODEL,
+                "messages": messages,
+                "tools": TOOLS,
+                "tool_choice": "auto",
+            })
+            msg = response.message  # AssistantMessage
+            # Keep the messages list as dicts end-to-end so later turns re-serialize cleanly.
+            messages.append(msg.serialize())
+
+            tool_calls = msg.tool_calls or []
+            if not tool_calls:
+                reply_text = msg.content
+                break
+
+            for tc in tool_calls:
+                # ToolCall.function.arguments is already a dict in primfunctions' wire shape.
+                args = tc.function.arguments or {}
+                if isinstance(args, str):
+                    args = json.loads(args or "{}")
+                result = _execute_tool(state, tc.function.name, args)
+                messages.append(ToolResultMessage(
+                    tool_call_id=tc.id,
+                    name=tc.function.name,
+                    content=result,  # ToolResultMessage expects a dict
+                ).serialize())
+                # Mirror state to the UI after every tool call.
+                _save_state(context, state)
+                yield _state_update_event(state)
+    except Exception as e:  # noqa: BLE001 - surface anything to the caller
+        # Drop the partial turn from the message log so the next turn doesn't
+        # carry a malformed message that would re-trigger the same failure.
+        # Easiest robust thing: rebuild messages from the system prompt + the
+        # last good completion-message snapshot.
+        messages = context.get_completion_messages() or [
+            {"role": "system", "content": SYSTEM_PROMPT}
+        ]
+        error_text = (
+            "Sorry, I had trouble processing that. Could you describe it in "
+            "words instead?"
+        )
+        # Log to the UI debug stream so we can diagnose.
+        yield CustomEvent(
+            name="agent_error",
+            data={"where": "completion_loop", "error": str(e)[:300]},
+        )
 
     context.set_completion_messages(messages)
     _save_state(context, state)
 
     if reply_text:
         yield TextToSpeechEvent(text=reply_text, voice=VOICE)
+    elif error_text:
+        yield TextToSpeechEvent(text=error_text, voice=VOICE)

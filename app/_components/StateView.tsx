@@ -24,7 +24,7 @@ export function StateView({ state, onEdit }: Props) {
   );
 }
 
-function Card({
+export function Card({
   title,
   empty,
   children,
@@ -47,7 +47,7 @@ function Card({
   );
 }
 
-function EditableField({
+export function EditableField({
   label,
   value,
   placeholder,

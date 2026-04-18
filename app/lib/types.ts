@@ -46,6 +46,26 @@ export interface Booking {
   etaMinutes: number | null;
 }
 
+export type PhotoKind = "insurance" | "symptom" | "document" | "other";
+
+export interface PhotoRequest {
+  kind: PhotoKind;
+  prompt: string;
+  requestedAt: string;
+}
+
+export interface Insurance {
+  insurer?: string;
+  memberId?: string;
+  groupNumber?: string;
+  planType?: string;
+}
+
+export interface SymptomObservation {
+  area: string;
+  findings: string;
+}
+
 export interface AgentState {
   patient: Patient;
   situation: Situation;
@@ -53,6 +73,9 @@ export interface AgentState {
   location: Location;
   candidates: Nurse[];
   booking: Booking | null;
+  photoRequest: PhotoRequest | null;
+  insurance: Insurance;
+  symptomObservations: SymptomObservation[];
 }
 
 export const emptyState = (): AgentState => ({
@@ -62,4 +85,7 @@ export const emptyState = (): AgentState => ({
   location: { label: "Downtown SF", lat: 37.7749, lng: -122.4194 },
   candidates: [],
   booking: null,
+  photoRequest: null,
+  insurance: {},
+  symptomObservations: [],
 });

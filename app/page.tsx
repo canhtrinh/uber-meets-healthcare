@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { CallButton } from "./_components/CallButton";
 import { StateView } from "./_components/StateView";
 import { NurseList } from "./_components/NurseList";
 import { BookingBar } from "./_components/BookingBar";
 import { BookingConfirmation } from "./_components/BookingConfirmation";
+import { CameraCapture } from "./_components/CameraCapture";
+import { InsuranceCardView } from "./_components/InsuranceCardView";
+import { ObservationsView } from "./_components/ObservationsView";
 import { useAgentState } from "./_components/useAgentState";
-import type { Nurse } from "./lib/types";
+import type { Nurse, PhotoRequest } from "./lib/types";
 
 export default function Page() {
   const { state, sendUserEdit, sendUserMessage } = useAgentState();
@@ -30,8 +33,28 @@ export default function Page() {
     );
   };
 
+  const onPhotoSend = (kind: PhotoRequest["kind"], b64: string) => {
+    sendUserMessage(`[user-photo] kind=${kind} data=${b64}`);
+  };
+
+  const onPhotoCancel = () => {
+    sendUserMessage("[user-cancel-photo]");
+  };
+
   const situationReady =
     state.situation.issueTags.length > 0 || state.candidates.length > 0;
+
+  const hasInsurance =
+    !!state.insurance.insurer ||
+    !!state.insurance.memberId ||
+    !!state.insurance.groupNumber ||
+    !!state.insurance.planType;
+
+  // Camera box takes priority over the booking bar so the user finishes the
+  // photo flow before picking a time.
+  const showCamera = state.photoRequest != null;
+  const showBookingBar =
+    !showCamera && !state.booking && selectedNurse != null;
 
   return (
     <div className="min-h-dvh flex flex-col">
@@ -77,6 +100,19 @@ export default function Page() {
             ) : (
               <StateView state={state} onEdit={sendUserEdit} />
             )}
+            {hasInsurance && (
+              <div className="mt-3">
+                <InsuranceCardView
+                  insurance={state.insurance}
+                  onEdit={sendUserEdit}
+                />
+              </div>
+            )}
+            {state.symptomObservations.length > 0 && (
+              <div className="mt-3">
+                <ObservationsView observations={state.symptomObservations} />
+              </div>
+            )}
             <div className="mt-5">
               <NurseList
                 nurses={state.candidates}
@@ -88,7 +124,16 @@ export default function Page() {
         </div>
       </main>
 
-      {!state.booking && selectedNurse && (
+      {showCamera && state.photoRequest && (
+        <CameraCapture
+          key={state.photoRequest.requestedAt}
+          request={state.photoRequest}
+          onSend={onPhotoSend}
+          onCancel={onPhotoCancel}
+        />
+      )}
+
+      {showBookingBar && selectedNurse && (
         <BookingBar
           nurse={selectedNurse}
           onConfirm={onConfirm}
