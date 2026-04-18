@@ -3,28 +3,28 @@
 import { usePrimVoices } from "primvoices-react";
 import { useEffect, useRef, useState } from "react";
 
-export function CallButton() {
+interface Props {
+  inCall: boolean;
+  setInCall: (v: boolean) => void;
+}
+
+export function CallButton({ inCall, setInCall }: Props) {
   const {
     connect,
     disconnect,
     startListening,
     stopListening,
     isConnected,
-    isListening,
     isPlaying,
     audioStats,
     error,
   } = usePrimVoices();
 
-  const [inCall, setInCall] = useState(false);
   const [muted, setMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const startedAt = useRef<number | null>(null);
-  // Tracks whether we ever saw isConnected === true during this call so we can
-  // distinguish "still connecting" from "WS dropped after being up".
   const wasConnected = useRef(false);
 
-  // Clean up mic/socket when the component unmounts.
   useEffect(() => {
     return () => {
       stopListening();
@@ -33,11 +33,8 @@ export function CallButton() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Start the call timer only once the WS is actually up.
   useEffect(() => {
-    if (!inCall || !isConnected) {
-      return;
-    }
+    if (!inCall || !isConnected) return;
     if (startedAt.current == null) startedAt.current = Date.now();
     const t = setInterval(() => {
       if (startedAt.current != null) {
@@ -47,38 +44,32 @@ export function CallButton() {
     return () => clearInterval(t);
   }, [inCall, isConnected]);
 
-  // Track the "was connected then dropped" transition, and only then reset the UI.
   useEffect(() => {
     if (isConnected) {
       wasConnected.current = true;
       return;
     }
     if (inCall && wasConnected.current) {
-      // WS was up, now it's gone — treat as hangup.
       wasConnected.current = false;
       startedAt.current = null;
       setSeconds(0);
       setInCall(false);
       setMuted(false);
     }
-  }, [inCall, isConnected]);
+  }, [inCall, isConnected, setInCall]);
 
   const startCall = async () => {
     setMuted(false);
     setInCall(true);
     try {
       if (!isConnected) {
-        // The hook's `connect` is typed as () => void but its runtime implementation
-        // is async and awaitable — awaiting ensures the WS is actually open before
-        // we try to open the mic. Without this, startListening silently bails on the
-        // very first click because the SDK checks `isConnected` before calling
-        // getUserMedia. Second click then works because the WS opened in the
-        // background. Awaiting fixes the single-click UX.
+        // Hook's connect is typed () => void but runtime-async; await ensures the
+        // WS is open before startListening, so the very first click opens the mic
+        // prompt (SDK's startListening silently bails if isConnected is false).
         await (connect as unknown as () => Promise<void>)();
       }
       await startListening();
     } catch (e) {
-      // Permission denied, mic unavailable, or WS failed — bail out.
       console.error(e);
       setInCall(false);
       disconnect();
@@ -105,27 +96,6 @@ export function CallButton() {
     }
   };
 
-  if (!inCall) {
-    return (
-      <div className="flex flex-col items-center gap-3">
-        <button
-          onClick={startCall}
-          aria-label="Call dispatcher"
-          className="group relative w-44 h-44 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center shadow-xl shadow-emerald-600/30 transition-transform hover:scale-[1.02] active:scale-[0.98]"
-        >
-          <PhoneIcon className="w-14 h-14" />
-        </button>
-        <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-          Call dispatcher
-        </div>
-        <div className="text-xs text-zinc-500 h-4">
-          {error ? <span className="text-red-500">{error}</span> : ""}
-        </div>
-      </div>
-    );
-  }
-
-  // In-call: waveform card, mute, hangup.
   const level = Math.min(1, audioStats?.level ?? 0);
   const status = error
     ? "Error"
@@ -139,47 +109,67 @@ export function CallButton() {
             ? "Connected"
             : "Connecting…";
 
-  return (
-    <div className="flex flex-col items-center gap-5 w-full max-w-xs">
-      <div className="w-full rounded-3xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-5 py-5 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-block w-2 h-2 rounded-full ${
-                isConnected
-                  ? isPlaying
-                    ? "bg-sky-500"
-                    : muted
-                      ? "bg-zinc-400"
-                      : "bg-emerald-500"
-                  : "bg-amber-500"
-              } ${isConnected && !muted ? "animate-pulse" : ""}`}
-              aria-hidden
-            />
-            <span className="text-sm font-medium">{status}</span>
-          </div>
-          <div className="text-sm tabular-nums text-zinc-500">
-            {formatClock(seconds)}
-          </div>
+  if (!inCall) {
+    // Pre-call splash: centered medium button so the state cards below are
+    // visible without a long scroll on mobile.
+    return (
+      <div className="flex flex-col items-center gap-2 py-6">
+        <button
+          onClick={startCall}
+          aria-label="Call dispatcher"
+          className="group relative w-28 h-28 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center shadow-xl shadow-emerald-600/30 transition-transform hover:scale-[1.02] active:scale-[0.98]"
+        >
+          <PhoneIcon className="w-10 h-10" />
+          <span className="absolute -inset-1 rounded-full border-2 border-emerald-400/40 animate-ping" />
+        </button>
+        <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+          Tap to call
         </div>
-        <Waveform level={level} speaking={!!audioStats?.isSpeaking} muted={muted} playing={isPlaying} />
+        <div className="text-xs text-zinc-500 max-w-xs text-center leading-relaxed">
+          Speak naturally. The details below fill in as we talk — tap any field
+          to correct it.
+        </div>
+        {error && <div className="text-xs text-red-500 mt-1">{error}</div>}
       </div>
+    );
+  }
 
-      <div className="flex items-center gap-4">
+  // In-call: thin sticky top bar so state cards dominate the viewport.
+  return (
+    <div className="sticky top-0 z-30 border-b border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-950/95 backdrop-blur">
+      <div className="mx-auto max-w-xl flex items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4">
+        <span
+          className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+            isConnected
+              ? isPlaying
+                ? "bg-sky-500"
+                : muted
+                  ? "bg-zinc-400"
+                  : "bg-emerald-500"
+              : "bg-amber-500"
+          } ${isConnected && !muted ? "animate-pulse" : ""}`}
+          aria-hidden
+        />
+        <span className="text-xs font-medium truncate flex-1 min-w-0">
+          {status}
+        </span>
+        <MiniWaveform level={level} muted={muted} playing={isPlaying} />
+        <span className="text-[11px] tabular-nums text-zinc-500 shrink-0">
+          {formatClock(seconds)}
+        </span>
         <RoundIconButton
           label={muted ? "Unmute microphone" : "Mute microphone"}
           onClick={toggleMute}
           tone={muted ? "muted" : "neutral"}
         >
-          {muted ? <MicOffIcon className="w-5 h-5" /> : <MicIcon className="w-5 h-5" />}
+          {muted ? (
+            <MicOffIcon className="w-4 h-4" />
+          ) : (
+            <MicIcon className="w-4 h-4" />
+          )}
         </RoundIconButton>
-        <RoundIconButton
-          label="End call"
-          onClick={endCall}
-          tone="danger"
-          size="lg"
-        >
-          <HangupIcon className="w-7 h-7" />
+        <RoundIconButton label="End call" onClick={endCall} tone="danger">
+          <HangupIcon className="w-4 h-4" />
         </RoundIconButton>
       </div>
     </div>
@@ -192,40 +182,38 @@ function formatClock(total: number) {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-function Waveform({
+function MiniWaveform({
   level,
-  speaking,
   muted,
   playing,
 }: {
   level: number;
-  speaking: boolean;
   muted: boolean;
   playing: boolean;
 }) {
   const color = muted
-    ? "bg-zinc-300 dark:bg-zinc-700"
+    ? "bg-zinc-400 dark:bg-zinc-600"
     : playing
       ? "bg-sky-500"
-      : speaking
-        ? "bg-emerald-500"
-        : "bg-zinc-300 dark:bg-zinc-700";
-
-  const bars = 18;
+      : "bg-emerald-500";
+  const bars = 9;
   return (
-    <div className="mt-4 flex items-center justify-center gap-1 h-10">
+    <div
+      className="hidden xs:flex items-center gap-[2px] h-5 sm:flex shrink-0"
+      aria-hidden
+    >
       {Array.from({ length: bars }).map((_, i) => {
         const center = (bars - 1) / 2;
         const d = Math.abs(i - center) / center;
-        const amp = muted ? 0.12 : Math.max(0.12, level * (1 - d * 0.6));
+        const amp = muted ? 0.15 : Math.max(0.15, level * (1 - d * 0.5));
         return (
           <span
             key={i}
-            className={`inline-block w-1 rounded-full ${color} transition-all`}
+            className={`inline-block w-[2px] rounded-full ${color}`}
             style={{
-              height: `${10 + amp * 30}px`,
-              opacity: muted ? 0.5 : 0.8 + amp * 0.2,
-              transition: "height 80ms linear, opacity 120ms linear",
+              height: `${6 + amp * 12}px`,
+              opacity: muted ? 0.4 : 0.85,
+              transition: "height 80ms linear",
             }}
           />
         );
@@ -239,26 +227,24 @@ function RoundIconButton({
   onClick,
   children,
   tone = "neutral",
-  size = "md",
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
   tone?: "neutral" | "muted" | "danger";
-  size?: "md" | "lg";
 }) {
-  const base =
-    "rounded-full flex items-center justify-center shadow-md transition-transform active:scale-95";
-  const sz = size === "lg" ? "w-16 h-16" : "w-12 h-12";
   const tones = {
     neutral:
       "bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-100 hover:bg-zinc-200 dark:hover:bg-zinc-700",
-    muted:
-      "bg-amber-500 text-white hover:bg-amber-400",
+    muted: "bg-amber-500 text-white hover:bg-amber-400",
     danger: "bg-red-600 text-white hover:bg-red-500",
   };
   return (
-    <button onClick={onClick} aria-label={label} className={`${base} ${sz} ${tones[tone]}`}>
+    <button
+      onClick={onClick}
+      aria-label={label}
+      className={`rounded-full w-8 h-8 flex items-center justify-center shadow-sm transition-transform active:scale-95 shrink-0 ${tones[tone]}`}
+    >
       {children}
     </button>
   );
