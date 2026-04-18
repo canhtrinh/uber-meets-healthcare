@@ -73,7 +73,8 @@ async def classify_emergency(text: str) -> dict:
             ),
             timeout=3.0,
         )
-        return json.loads(resp.choices[0].message.content)
+        raw = json.loads(resp.choices[0].message.content)
+        return {k.strip('"'): v for k, v in raw.items()}
     except asyncio.TimeoutError:
         logger.warning("Baseten classify_emergency timed out")
         return {"classification": "unclear", "reason": "classifier timeout"}
