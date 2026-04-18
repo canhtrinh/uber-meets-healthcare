@@ -1,6 +1,6 @@
 "use client";
 
-import type { Booking } from "../lib/types";
+import { formatEta, type Booking } from "../lib/types";
 
 export function BookingConfirmation({ booking }: { booking: Booking }) {
   return (
@@ -20,8 +20,8 @@ export function BookingConfirmation({ booking }: { booking: Booking }) {
       </div>
       {booking.etaMinutes != null && (
         <div className="mt-3 text-sm text-emerald-800 dark:text-emerald-300">
-          ETA {booking.etaMinutes} minutes. You&apos;ll get an SMS when they&apos;re on the
-          way.
+          ETA {formatEta(booking.etaMinutes)}. You&apos;ll get an SMS when they&apos;re on
+          the way.
         </div>
       )}
     </div>

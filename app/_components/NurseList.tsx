@@ -1,6 +1,6 @@
 "use client";
 
-import type { Nurse } from "../lib/types";
+import { formatEta, type Nurse } from "../lib/types";
 
 interface Props {
   nurses: Nurse[];
@@ -50,7 +50,7 @@ export function NurseList({ nurses, selectedId, onSelect }: Props) {
                 </div>
                 <div className="flex items-center gap-2 pt-1 text-xs">
                   <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
-                    <Dot /> {n.etaMinutes} min
+                    <Dot /> {formatEta(n.etaMinutes)}
                   </span>
                   <span className="text-zinc-400">·</span>
                   <span className="text-zinc-500">

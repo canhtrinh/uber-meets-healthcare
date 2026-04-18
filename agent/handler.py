@@ -108,67 +108,82 @@ read it back.
 
 
 # ---------- Mock nurse catalog ----------
-# Hardcoded SF-area nurses. Lat/lng roughly within city bounds.
+# Hardcoded SF-area nurses. ETAs are intentionally scheduled-visit-shaped
+# (mostly 2–4 hours out, with one rush slot at 45 min) — home-health dispatch
+# isn't rideshare. baseEtaMinutes is the travel/prep time to the caller's
+# door; the ranker uses it directly.
 NURSES = [
     {"id": "n1", "name": "Sarah Chen, RN", "photo": "/avatars/1.png",
      "canTreat": ["fall", "geriatric-assessment", "post-op", "medication-management"],
      "languages": ["en", "zh"], "lat": 37.7849, "lng": -122.4094,
      "availableNow": True, "nextSlot": "Today 3:00 PM",
+     "baseEtaMinutes": 45,
      "rating": 4.9, "yearsExperience": 12, "gender": "f"},
     {"id": "n2", "name": "Marcus Johnson, RN", "photo": "/avatars/2.png",
      "canTreat": ["wound-care", "post-op", "iv-therapy"],
      "languages": ["en"], "lat": 37.7649, "lng": -122.4294,
      "availableNow": True, "nextSlot": "Today 4:30 PM",
+     "baseEtaMinutes": 150,
      "rating": 4.8, "yearsExperience": 8, "gender": "m"},
     {"id": "n3", "name": "Priya Patel, NP", "photo": "/avatars/3.png",
      "canTreat": ["geriatric-assessment", "chronic-disease", "medication-management", "fall"],
      "languages": ["en", "hi"], "lat": 37.7949, "lng": -122.3994,
      "availableNow": False, "nextSlot": "Tomorrow 9:00 AM",
+     "baseEtaMinutes": 180,
      "rating": 5.0, "yearsExperience": 15, "gender": "f"},
     {"id": "n4", "name": "David Kim, RN", "photo": "/avatars/4.png",
      "canTreat": ["pediatric", "wound-care", "medication-management"],
      "languages": ["en", "ko"], "lat": 37.7549, "lng": -122.4194,
      "availableNow": True, "nextSlot": "Today 2:15 PM",
+     "baseEtaMinutes": 180,
      "rating": 4.7, "yearsExperience": 6, "gender": "m"},
     {"id": "n5", "name": "Elena Rodriguez, RN", "photo": "/avatars/5.png",
      "canTreat": ["fall", "wound-care", "post-op", "geriatric-assessment"],
      "languages": ["en", "es"], "lat": 37.7749, "lng": -122.4394,
      "availableNow": True, "nextSlot": "Today 3:45 PM",
+     "baseEtaMinutes": 120,
      "rating": 4.9, "yearsExperience": 11, "gender": "f"},
     {"id": "n6", "name": "Thomas Wright, RN", "photo": "/avatars/6.png",
      "canTreat": ["cardiac", "respiratory", "chronic-disease"],
      "languages": ["en"], "lat": 37.8049, "lng": -122.4194,
      "availableNow": False, "nextSlot": "Tomorrow 10:30 AM",
+     "baseEtaMinutes": 240,
      "rating": 4.8, "yearsExperience": 14, "gender": "m"},
     {"id": "n7", "name": "Amelia Foster, RN", "photo": "/avatars/7.png",
      "canTreat": ["mental-health", "dementia-care", "geriatric-assessment"],
      "languages": ["en"], "lat": 37.7699, "lng": -122.4094,
      "availableNow": True, "nextSlot": "Today 5:00 PM",
+     "baseEtaMinutes": 210,
      "rating": 4.9, "yearsExperience": 10, "gender": "f"},
     {"id": "n8", "name": "Jacob Liu, RN", "photo": "/avatars/8.png",
      "canTreat": ["iv-therapy", "wound-care", "post-op"],
      "languages": ["en", "zh"], "lat": 37.7499, "lng": -122.4094,
      "availableNow": True, "nextSlot": "Today 3:30 PM",
+     "baseEtaMinutes": 165,
      "rating": 4.6, "yearsExperience": 5, "gender": "m"},
     {"id": "n9", "name": "Grace Okafor, NP", "photo": "/avatars/9.png",
      "canTreat": ["hospice", "dementia-care", "chronic-disease", "medication-management"],
      "languages": ["en"], "lat": 37.7849, "lng": -122.4394,
      "availableNow": False, "nextSlot": "Tomorrow 11:00 AM",
+     "baseEtaMinutes": 225,
      "rating": 5.0, "yearsExperience": 18, "gender": "f"},
     {"id": "n10", "name": "Ryan O'Connor, RN", "photo": "/avatars/10.png",
      "canTreat": ["fall", "geriatric-assessment", "medication-management"],
      "languages": ["en"], "lat": 37.7799, "lng": -122.4094,
      "availableNow": True, "nextSlot": "Today 2:45 PM",
+     "baseEtaMinutes": 135,
      "rating": 4.7, "yearsExperience": 7, "gender": "m"},
     {"id": "n11", "name": "Isabella Martinez, RN", "photo": "/avatars/11.png",
      "canTreat": ["pediatric", "mental-health"],
      "languages": ["en", "es"], "lat": 37.7599, "lng": -122.4394,
      "availableNow": True, "nextSlot": "Today 4:00 PM",
+     "baseEtaMinutes": 195,
      "rating": 4.8, "yearsExperience": 6, "gender": "f"},
     {"id": "n12", "name": "Daniel Park, RN", "photo": "/avatars/12.png",
      "canTreat": ["cardiac", "respiratory", "post-op"],
      "languages": ["en", "ko"], "lat": 37.7899, "lng": -122.4294,
      "availableNow": True, "nextSlot": "Today 5:30 PM",
+     "baseEtaMinutes": 240,
      "rating": 4.9, "yearsExperience": 13, "gender": "m"},
 ]
 
@@ -227,7 +242,6 @@ def _rank_nurses(state: dict) -> list:
     sit = state["situation"]
     prefs = state["preferences"]
     tags = set(sit.get("issueTags") or [])
-    user = (state["location"]["lat"], state["location"]["lng"])
     urgent = sit.get("urgency") == "now"
 
     # Must cover at least one reported tag. If no tags yet, show everyone.
@@ -243,7 +257,9 @@ def _rank_nurses(state: dict) -> list:
         gender = prefs.get("genderPref")
         if gender and n.get("gender") != gender:
             continue
-        n = {**n, "etaMinutes": _haversine_minutes(user, (n["lat"], n["lng"]))}
+        # Use the hand-tuned per-nurse ETA (home-health visits are scheduled
+        # hours out, not rideshare minutes).
+        n = {**n, "etaMinutes": n["baseEtaMinutes"]}
         fit.append(n)
 
     fit.sort(key=lambda n: (n["etaMinutes"], -n["rating"]))
@@ -483,10 +499,7 @@ def _apply_book_nurse(state: dict, args: dict) -> dict:
         "nurseId": nurse["id"],
         "nurseName": nurse["name"],
         "when": args.get("when"),
-        "etaMinutes": _haversine_minutes(
-            (state["location"]["lat"], state["location"]["lng"]),
-            (nurse["lat"], nurse["lng"]),
-        ),
+        "etaMinutes": nurse["baseEtaMinutes"],
     }
     return state
 
@@ -597,7 +610,7 @@ async def handler(event: Event, context: Context):
                 "What's going on?"
             ),
             voice=VOICE,
-            interruptible=True,
+            interruptible=False,
             stream=True,
         )
         return
@@ -678,6 +691,6 @@ async def handler(event: Event, context: Context):
         yield TextToSpeechEvent(
             text=reply_text,
             voice=VOICE,
-            interruptible=True,
+            interruptible=False,
             stream=True,
         )

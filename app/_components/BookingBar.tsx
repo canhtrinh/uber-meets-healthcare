@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Nurse } from "../lib/types";
+import { formatEta, type Nurse } from "../lib/types";
 
 interface Props {
   nurse: Nurse | null;
@@ -41,7 +41,7 @@ export function BookingBar({ nurse, onConfirm, onCancel }: Props) {
           <div className="min-w-0">
             <div className="text-sm font-medium truncate">{nurse.name}</div>
             <div className="text-xs text-zinc-500">
-              {nurse.etaMinutes} min away
+              {formatEta(nurse.etaMinutes)} away
             </div>
           </div>
         </div>

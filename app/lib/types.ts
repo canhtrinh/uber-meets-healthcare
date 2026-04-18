@@ -78,3 +78,18 @@ export const emptyState = (): AgentState => ({
   candidates: [],
   booking: null,
 });
+
+/**
+ * Human-friendly ETA string for minutes.
+ *   45   -> "45 min"
+ *   60   -> "1 hr"
+ *   120  -> "2 hr"
+ *   135  -> "2 hr 15 min"
+ */
+export function formatEta(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (m === 0) return `${h} hr`;
+  return `${h} hr ${m} min`;
+}
