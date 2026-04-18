@@ -1,0 +1,11 @@
+version: '1.0'
+uberhealthcare:
+  actor:
+    channels:
+    - type: http
+      url: http://localhost:8008
+  agent:
+    name: Uber Healthcare
+    code_path: /agent
+    entry_point: uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8008
+    port: 8008
