@@ -484,6 +484,7 @@ async def handler(event: Event, context: Context):
 
     # --- Baseten safety classifier (runs before the main LLM loop) ---
     emergency = await baseten.classify_emergency(user_text)
+    yield CustomEvent(name="baseten_classification", data={"baseten": emergency})
     if emergency.get("classification") == "emergency":
         yield TextToSpeechEvent(
             text=(

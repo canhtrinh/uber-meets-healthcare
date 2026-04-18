@@ -6,6 +6,7 @@ If the utterance contains life-threatening red flags, the caller is
 instructed to dial 911 and the turn is short-circuited.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -60,16 +61,22 @@ async def classify_emergency(text: str) -> dict:
         logger.warning("Baseten not configured — skipping emergency check")
         return {"classification": "unclear", "reason": "classifier not configured"}
     try:
-        resp = await _client.chat.completions.create(
-            model=_model,
-            messages=[
-                {"role": "user", "content": _EMERGENCY_PROMPT.format(text=text)}
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=120,
-            temperature=0.0,
+        resp = await asyncio.wait_for(
+            _client.chat.completions.create(
+                model=_model,
+                messages=[
+                    {"role": "user", "content": _EMERGENCY_PROMPT.format(text=text)}
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=120,
+                temperature=0.0,
+            ),
+            timeout=3.0,
         )
         return json.loads(resp.choices[0].message.content)
+    except asyncio.TimeoutError:
+        logger.warning("Baseten classify_emergency timed out")
+        return {"classification": "unclear", "reason": "classifier timeout"}
     except Exception as exc:
         logger.warning("Baseten classify_emergency failed: %s", exc)
         return {"classification": "unclear", "reason": "classifier unavailable"}
