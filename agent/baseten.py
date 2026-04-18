@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 
 from openai import AsyncOpenAI
 
@@ -73,8 +74,19 @@ async def classify_emergency(text: str) -> dict:
             ),
             timeout=3.0,
         )
-        raw = json.loads(resp.choices[0].message.content)
-        return {k.strip('"'): v for k, v in raw.items()}
+        content = resp.choices[0].message.content or ""
+        # DeepSeek sometimes wraps keys in extra quotes; try JSON first, then regex.
+        try:
+            raw = json.loads(content)
+            normalized = {k.strip('"').strip("'"): str(v).strip('"').strip("'")
+                          for k, v in raw.items()}
+            classification = normalized.get("classification", "unclear").lower()
+        except (json.JSONDecodeError, AttributeError):
+            m = re.search(r'classification["\s:]+([a-z_]+)', content, re.IGNORECASE)
+            classification = m.group(1).lower() if m else "unclear"
+        if classification not in ("emergency", "non_emergency", "unclear"):
+            classification = "unclear"
+        return {"classification": classification, "raw": content[:120]}
     except asyncio.TimeoutError:
         logger.warning("Baseten classify_emergency timed out")
         return {"classification": "unclear", "reason": "classifier timeout"}
