@@ -15,6 +15,7 @@ export function CallButton({ inCall, setInCall }: Props) {
     startListening,
     stopListening,
     isConnected,
+    isListening,
     isPlaying,
     audioStats,
     error,
@@ -35,18 +36,23 @@ export function CallButton({ inCall, setInCall }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Half-duplex gate: the mic is open only when (a) we're in a call,
-  // (b) the WS is up, (c) the agent is NOT currently speaking, and
-  // (d) the user hasn't manually muted.
+  // Half-duplex gate: mic is open only when (a) we're in a call, (b) the WS is
+  // up, (c) the agent is NOT currently speaking, (d) the user hasn't manually
+  // muted. The explicit isListening guard prevents redundant start/stop calls
+  // that would tangle the underlying getUserMedia stream. startListening and
+  // stopListening are intentionally out of the dep array because they are not
+  // guaranteed stable references from the SDK hook and would cause spurious
+  // re-fires on every render.
   useEffect(() => {
     if (!inCall || !isConnected) return;
     const shouldListen = !isPlaying && !userMuted;
-    if (shouldListen) {
-      startListening();
-    } else {
+    if (shouldListen && !isListening) {
+      startListening().catch((e) => console.error("[CallButton] startListening failed:", e));
+    } else if (!shouldListen && isListening) {
       stopListening();
     }
-  }, [inCall, isConnected, isPlaying, userMuted, startListening, stopListening]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inCall, isConnected, isPlaying, userMuted, isListening]);
 
   useEffect(() => {
     if (!inCall || !isConnected) return;
