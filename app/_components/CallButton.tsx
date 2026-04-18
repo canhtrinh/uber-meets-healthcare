@@ -15,15 +15,12 @@ export function CallButton({ inCall, setInCall }: Props) {
     startListening,
     stopListening,
     isConnected,
-    isListening,
     isPlaying,
     audioStats,
     error,
   } = usePrimVoices();
 
-  // User-controlled mute (separate from the auto-mute that happens while the
-  // agent is speaking). Auto-gate logic lives in the effect below.
-  const [userMuted, setUserMuted] = useState(false);
+  const [muted, setMuted] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const startedAt = useRef<number | null>(null);
   const wasConnected = useRef(false);
@@ -35,24 +32,6 @@ export function CallButton({ inCall, setInCall }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Half-duplex gate: mic is open only when (a) we're in a call, (b) the WS is
-  // up, (c) the agent is NOT currently speaking, (d) the user hasn't manually
-  // muted. The explicit isListening guard prevents redundant start/stop calls
-  // that would tangle the underlying getUserMedia stream. startListening and
-  // stopListening are intentionally out of the dep array because they are not
-  // guaranteed stable references from the SDK hook and would cause spurious
-  // re-fires on every render.
-  useEffect(() => {
-    if (!inCall || !isConnected) return;
-    const shouldListen = !isPlaying && !userMuted;
-    if (shouldListen && !isListening) {
-      startListening().catch((e) => console.error("[CallButton] startListening failed:", e));
-    } else if (!shouldListen && isListening) {
-      stopListening();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inCall, isConnected, isPlaying, userMuted, isListening]);
 
   useEffect(() => {
     if (!inCall || !isConnected) return;
@@ -75,12 +54,12 @@ export function CallButton({ inCall, setInCall }: Props) {
       startedAt.current = null;
       setSeconds(0);
       setInCall(false);
-      setUserMuted(false);
+      setMuted(false);
     }
   }, [inCall, isConnected, setInCall]);
 
   const startCall = async () => {
-    setUserMuted(false);
+    setMuted(false);
     setInCall(true);
     try {
       if (!isConnected) {
@@ -89,9 +68,6 @@ export function CallButton({ inCall, setInCall }: Props) {
         // prompt (SDK's startListening silently bails if isConnected is false).
         await (connect as unknown as () => Promise<void>)();
       }
-      // Kick off the first startListening in the same user-gesture promise
-      // chain so the browser shows the mic permission prompt. After this,
-      // the half-duplex effect above owns mic state.
       await startListening();
     } catch (e) {
       console.error(e);
@@ -107,28 +83,35 @@ export function CallButton({ inCall, setInCall }: Props) {
     startedAt.current = null;
     setSeconds(0);
     setInCall(false);
-    setUserMuted(false);
+    setMuted(false);
   };
 
-  const toggleMute = () => {
-    // The gate effect will pick this up and stop/start listening accordingly.
-    setUserMuted((v) => !v);
+  const toggleMute = async () => {
+    if (muted) {
+      await startListening();
+      setMuted(false);
+    } else {
+      stopListening();
+      setMuted(true);
+    }
   };
 
   const level = Math.min(1, audioStats?.level ?? 0);
   const status = error
     ? "Error"
-    : userMuted
+    : muted
       ? "Muted"
       : isPlaying
         ? "Agent speaking…"
         : audioStats?.isSpeaking
           ? "Listening"
           : isConnected
-            ? "Your turn"
+            ? "Connected"
             : "Connecting…";
 
   if (!inCall) {
+    // Pre-call splash: centered medium button so the state cards below are
+    // visible without a long scroll on mobile.
     return (
       <div className="flex flex-col items-center gap-2 py-6">
         <button
@@ -151,6 +134,7 @@ export function CallButton({ inCall, setInCall }: Props) {
     );
   }
 
+  // In-call: thin sticky top bar so state cards dominate the viewport.
   return (
     <div className="sticky top-0 z-30 border-b border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-950/95 backdrop-blur">
       <div className="mx-auto max-w-xl flex items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4">
@@ -159,26 +143,26 @@ export function CallButton({ inCall, setInCall }: Props) {
             isConnected
               ? isPlaying
                 ? "bg-sky-500"
-                : userMuted
+                : muted
                   ? "bg-zinc-400"
                   : "bg-emerald-500"
               : "bg-amber-500"
-          } ${isConnected && !userMuted && !isPlaying ? "animate-pulse" : ""}`}
+          } ${isConnected && !muted ? "animate-pulse" : ""}`}
           aria-hidden
         />
         <span className="text-xs font-medium truncate flex-1 min-w-0">
           {status}
         </span>
-        <MiniWaveform level={level} muted={userMuted || isPlaying} playing={isPlaying} />
+        <MiniWaveform level={level} muted={muted} playing={isPlaying} />
         <span className="text-[11px] tabular-nums text-zinc-500 shrink-0">
           {formatClock(seconds)}
         </span>
         <RoundIconButton
-          label={userMuted ? "Unmute microphone" : "Mute microphone"}
+          label={muted ? "Unmute microphone" : "Mute microphone"}
           onClick={toggleMute}
-          tone={userMuted ? "muted" : "neutral"}
+          tone={muted ? "muted" : "neutral"}
         >
-          {userMuted ? (
+          {muted ? (
             <MicOffIcon className="w-4 h-4" />
           ) : (
             <MicIcon className="w-4 h-4" />
