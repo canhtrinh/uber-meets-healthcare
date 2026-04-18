@@ -1,0 +1,35 @@
+scenario_id: multilingual_preference
+title: Multilingual — Spanish-Speaking Nurse Preference
+description: >
+  A Spanish-speaking caller requests a nurse who speaks Spanish.
+  The agent should capture the language preference and filter candidates
+  accordingly (Elena Rodriguez is the expected match).
+
+actors:
+  - name: caller
+    type: persona
+    role: patient
+    objectives:
+      - objective: Describe needing help with chronic disease management
+      - objective: Mention that the preferred language is Spanish
+      - objective: Complete the full intake and book a nurse
+    knowledge: >
+      I am Carmen, 67 years old. I have diabetes and need help managing
+      my medication. I speak some English but I feel much more comfortable
+      with a Spanish-speaking nurse. I live with my daughter.
+
+initial_turn:
+  actor: caller
+  action: Call and explain the diabetes medication management need, mentioning the language preference
+
+briefs:
+  caller: >
+    You prefer a Spanish-speaking nurse. Mention it early in the call.
+    Cooperate fully with intake questions. Accept a booking if a Spanish-speaking
+    nurse is available.
+
+assertions:
+  - Agent captured the Spanish language preference before searching
+  - Agent offered a nurse who lists Spanish (es) in their languages
+  - Agent did not offer English-only nurses as the primary recommendation
+  - Agent completed a booking
