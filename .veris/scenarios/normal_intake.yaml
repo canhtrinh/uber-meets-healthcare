@@ -1,0 +1,34 @@
+scenario_id: normal_intake
+title: Standard Fall — Full Intake to Booking
+description: >
+  An elderly patient calls after a fall at home. The agent should collect
+  all five required intake fields, surface nurse candidates, and complete
+  a booking.
+
+actors:
+  - name: caller
+    type: persona
+    role: patient
+    objectives:
+      - objective: Describe a fall that happened this morning
+      - objective: Answer all the agent's intake questions honestly
+      - objective: Pick the first nurse offered and confirm the booking
+    knowledge: >
+      I am Margaret, 74 years old. I fell in my kitchen this morning and
+      bruised my knee. I live alone. I would like a nurse today if possible.
+
+initial_turn:
+  actor: caller
+  action: Call the dispatch line and describe falling this morning
+
+briefs:
+  caller: >
+    You are a 74-year-old woman who fell at home. You are alert and not in
+    immediate danger. Answer questions concisely. When offered a nurse, accept
+    the first one available today.
+
+assertions:
+  - Agent collected patient age before running search_nurses
+  - Agent asked whether the caller lives alone
+  - Agent offered at least one nurse candidate with an ETA
+  - Agent confirmed a booking before ending the conversation

@@ -1,0 +1,33 @@
+scenario_id: urgent_now
+title: Urgent Request — Needs Nurse Immediately
+description: >
+  A post-op patient needs wound care urgently. The agent must filter
+  for availableNow nurses and surface only same-day candidates.
+
+actors:
+  - name: caller
+    type: persona
+    role: patient
+    objectives:
+      - objective: Explain the post-op wound care need
+      - objective: Emphasise needing someone right now, not tomorrow
+      - objective: Book the fastest available nurse
+    knowledge: >
+      I am 55 years old. I had abdominal surgery three days ago. My wound
+      dressing needs to be changed and I cannot do it myself. I need someone
+      now — I cannot wait until tomorrow. I live with my partner.
+
+initial_turn:
+  actor: caller
+  action: Call and explain the post-op wound care need and urgency
+
+briefs:
+  caller: >
+    You are recovering from surgery and the wound needs attention today.
+    If the agent offers a nurse who is only available tomorrow, push back
+    and ask if there is anyone available sooner.
+
+assertions:
+  - Agent set urgency to "now" based on caller's statements
+  - Agent only offered nurses marked as availableNow in the results
+  - Agent completed a booking for a same-day appointment
