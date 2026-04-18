@@ -24,6 +24,8 @@ from primfunctions.events import (
 )
 from primfunctions.context import Context
 from primfunctions.completions import (
+    CacheBreakpoint,
+    SystemMessage,
     ToolResultMessage,
     UserMessage,
     configure_provider,
@@ -56,9 +58,10 @@ OPTIONAL intake — only ask if the caller volunteers OR it's clearly relevant:
   - preferences.genderPref
 
 CONVERSATION RULES:
-- Keep every reply SHORT (one sentence, one question).
+- Keep every reply SHORT (one sentence, one question). Phone-call cadence, no lists.
 - ASK ONE QUESTION AT A TIME. Never stack multiple questions.
-- After you learn something, IMMEDIATELY call the matching update_* tool. Don't batch.
+- When a single user turn gives you multiple facts (e.g. "I'm 62 and I live alone"),
+  emit MULTIPLE TOOL CALLS IN PARALLEL in one response — don't serialize them.
 - After each tool call, read the `missingRequired` field in the tool result. If it is
   non-empty, your very next sentence must ask about the first item in that list.
 - Only when `missingRequired` is empty should you call search_nurses.
@@ -451,7 +454,8 @@ def _execute_tool(state: dict, name: str, args: dict) -> dict:
 # ---------- Main handler ----------
 
 MODEL = "claude-haiku-4-5"
-VOICE = "nova"
+# lyric is Prim-native: lower TTFB than OpenAI voices (no extra provider hop).
+VOICE = "lyric"
 
 
 async def handler(event: Event, context: Context):
@@ -463,12 +467,20 @@ async def handler(event: Event, context: Context):
             model=context.variables.get("BASETEN_MODEL"),
         )
         state = _get_state(context)
-        context.set_completion_messages([{"role": "system", "content": SYSTEM_PROMPT}])
+        # Mark the system prompt as a cache breakpoint so turn 2+ skips re-tokenizing it
+        # (Anthropic ephemeral cache, 5 minute TTL).
+        context.set_completion_messages([
+            SystemMessage(
+                content=SYSTEM_PROMPT,
+                cache_breakpoint=CacheBreakpoint(ttl="5m"),
+            ).serialize()
+        ])
         yield _state_update_event(state)
         yield TextToSpeechEvent(
             text="Hi, this is the home-nurse dispatch line. Take a breath - what's going on?",
             voice=VOICE,
             interruptible=True,
+            stream=True,
         )
         return
 
@@ -498,14 +510,19 @@ async def handler(event: Event, context: Context):
 
     state = _get_state(context)
     messages = context.get_completion_messages() or [
-        {"role": "system", "content": SYSTEM_PROMPT}
+        SystemMessage(
+            content=SYSTEM_PROMPT,
+            cache_breakpoint=CacheBreakpoint(ttl="5m"),
+        ).serialize()
     ]
     messages.append({"role": "user", "content": user_text})
 
     reply_text: Optional[str] = None
 
-    # Tool-calling loop. Cap iterations so we never spin forever.
-    for _ in range(6):
+    # Tool loop capped low — in practice a turn needs (a) one LLM call returning
+    # tool calls and (b) one follow-up to speak the result. The model is prompted
+    # to emit multiple tool calls in parallel, so 2 iterations is enough.
+    for _ in range(3):
         response = await generate_chat_completion({
             "provider": "anthropic",
             "model": MODEL,
@@ -541,4 +558,6 @@ async def handler(event: Event, context: Context):
     _save_state(context, state)
 
     if reply_text:
-        yield TextToSpeechEvent(text=reply_text, voice=VOICE, interruptible=True)
+        yield TextToSpeechEvent(
+            text=reply_text, voice=VOICE, interruptible=True, stream=True,
+        )
