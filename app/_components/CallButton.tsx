@@ -57,11 +57,19 @@ export function CallButton() {
   const startCall = async () => {
     setMuted(false);
     setInCall(true);
-    if (!isConnected) connect();
     try {
+      if (!isConnected) {
+        // The hook's `connect` is typed as () => void but its runtime implementation
+        // is async and awaitable — awaiting ensures the WS is actually open before
+        // we try to open the mic. Without this, startListening silently bails on the
+        // very first click because the SDK checks `isConnected` before calling
+        // getUserMedia. Second click then works because the WS opened in the
+        // background. Awaiting fixes the single-click UX.
+        await (connect as unknown as () => Promise<void>)();
+      }
       await startListening();
     } catch (e) {
-      // If the mic fails (permission denied etc), bail out of the call.
+      // Permission denied, mic unavailable, or WS failed — bail out.
       console.error(e);
       setInCall(false);
       disconnect();
