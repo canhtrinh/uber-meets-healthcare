@@ -1,0 +1,6 @@
+profiles:
+  default:
+    targets:
+      nurse-dispatch:
+        config_synced_at: '2026-04-18T19:42:12.775555Z'
+        environment_id: env_umromxurx0s5qluk0whd3

@@ -1,0 +1,10 @@
+ARG GVISOR_BASE
+FROM ${GVISOR_BASE}
+
+COPY agent/requirements_server.txt /agent/requirements_server.txt
+RUN pip install -r /agent/requirements_server.txt
+
+COPY agent/server.py /agent/server.py
+COPY agent/baseten.py /agent/baseten.py
+
+WORKDIR /app
