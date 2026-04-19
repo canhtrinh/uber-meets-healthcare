@@ -612,7 +612,7 @@ async def handler(event: Event, context: Context):
                 "What's going on?"
             ),
             voice=VOICE,
-            interruptible=True,
+            interruptible=False,
             stream=True,
             speed=SPEECH_SPEED,
         )
@@ -638,6 +638,7 @@ async def handler(event: Event, context: Context):
                 "Do not wait — call 911 now."
             ),
             voice=VOICE,
+            interruptible=False,
         )
         return
     # -----------------------------------------------------------------
@@ -694,7 +695,7 @@ async def handler(event: Event, context: Context):
         yield TextToSpeechEvent(
             text=reply_text,
             voice=VOICE,
-            interruptible=True,
+            interruptible=False,
             stream=True,
             speed=SPEECH_SPEED,
         )
